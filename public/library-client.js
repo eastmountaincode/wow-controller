@@ -148,13 +148,17 @@ export class LibraryClient {
     }
   }
 
-  async download(bank, file, onProgress, sink, signal) {
+  async download(bank, file, onProgress, sink, signal, maxBytes = Infinity) {
     signal?.throwIfAborted();
     await this.send("GET " + bank + " " + file.key);
     const header = /^SIZE (\d+)$/.exec(await this.line());
     if (!header || !Number.isSafeInteger(Number(header[1])) || Number(header[1]) > 0xffffffff)
       throw new Error("Invalid size from the WOW.");
     const size = Number(header[1]), blocks = [];
+    if (size > maxBytes) {
+      await this.resetSession();
+      throw new DeviceError("Sample exceeds the waveform size limit.");
+    }
     if (!sink && size > 128 * 1024 * 1024) {
       await this.resetSession();
       throw new DeviceError("This file needs a browser that supports streaming directly to disk.");

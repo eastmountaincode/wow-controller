@@ -1,0 +1,71 @@
+#sampleWave {
+  margin-bottom: clamp(1.35rem, 3vw, 2.6rem);
+}
+
+.wave-heading {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  padding-block: 0.4rem 0.6rem;
+  gap: 0.2rem 0.75rem;
+}
+
+.wave-heading h2 {
+  font-size: 0.92rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--muted);
+}
+
+#waveName {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+#waveTime {
+  margin-inline-start: auto;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.wave-track {
+  position: relative;
+  overflow: hidden;
+  border-block: 1px solid var(--edge);
+  background: #eff0e8;
+}
+
+#waveShape {
+  --wave-rule: #b4b8a9;
+  display: block;
+  width: 100%;
+  height: clamp(5.5rem, 10vw, 7.25rem);
+  color: #3c4a33;
+}
+
+#waveCursor {
+  position: absolute;
+  inset-block: 0;
+  width: 2px;
+  transform: translateX(-1px);
+  background: #ac411d;
+  box-shadow: 0 0 0 1px #f8f8f2;
+  pointer-events: none;
+}
+
+#waveCursor::before {
+  content: "";
+  position: absolute;
+  left: -3px;
+  width: 8px;
+  height: 6px;
+  background: #ac411d;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+
+#waveNote {
+  font-size: 0.86rem;
+  margin-top: 0;
+}

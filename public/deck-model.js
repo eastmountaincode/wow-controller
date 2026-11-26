@@ -98,7 +98,7 @@ export function createDeckModel(host) {
     if (peak === 0) lamp = 0;
     const mask = connected ? (keyMask ?? 0) : 0;
     if (mask !== painted.mask || lamp !== painted.lamp || connected !== painted.connected) {
-      const description = [layoutDescription, connected ? 'MIDI connected.' : 'MIDI disconnected.'];
+      const description = [layoutDescription];
       if (lamp !== null) description.push(`Start light ${lampNames[lamp]}.`);
       if (mask) description.push(`Currently holding ${buttonLabels.filter((_, index) => mask & (1 << index)).join(', ')}.`);
       body.setAttribute('aria-label', description.join(' '));

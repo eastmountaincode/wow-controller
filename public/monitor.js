@@ -45,11 +45,10 @@ function showValue(id, text) {
 function render() {
   frame = 0;
   model.update(state);
-  showValue("speed", state.rpm === null ? "—" : state.rpm === 0 ? "0" : state.rpm.toFixed(1));
-  showValue("angle", state.angle === null ? "" : (Math.round(state.angle) % 360) + "°");
-  if (el("rpmUnit").hidden !== (state.rpm === null)) el("rpmUnit").hidden = state.rpm === null;
-  if (el("pitchUnit").hidden !== (state.pitch === null)) el("pitchUnit").hidden = state.pitch === null;
-  showValue("pitch", state.pitch === null ? "—" : String(Math.round((state.pitch * 100) / 4095)));
+  const speed = state.rpm === 0 ? "0" : state.rpm?.toFixed(1);
+  showValue("speed", speed == null ? "—" : speed + " rpm");
+  showValue("angle", state.angle === null ? "—" : (Math.round(state.angle) % 360) + "°");
+  showValue("pitch", state.pitch === null ? "—" : Math.round((state.pitch * 100) / 4095) + "%");
   showValue("motor", state.motor === null ? "—" : state.motor ? "On" : "Off");
   let fader = "—";
   if (state.left !== null && state.right !== null)
@@ -164,8 +163,10 @@ function listen(port) {
     state.connected = Boolean(port);
     changed();
   }
-  el("status").textContent = port ? "MIDI connected" : "Waiting for MIDI input";
-  el("status").dataset.live = String(Boolean(port));
+  const available = [...access.inputs.values()].some(p => p.state === "connected");
+  el("chooseMidiInput").hidden = Boolean(port) || !available;
+  el("midiNotice").hidden = Boolean(port) || available;
+  if (!port && !available) showValue("midiNotice", "No MIDI input found.");
 }
 function listPorts() {
   const ports = [...access.inputs.values()].filter((p) => p.state === "connected");
@@ -213,7 +214,7 @@ el("connect").addEventListener("click", connectMidi);
 el("connectInput").addEventListener("click", connectMidi);
 if (!navigator.requestMIDIAccess) {
   el("connect").disabled = el("connectInput").disabled = el("sound").disabled = true;
-  showValue("status", "MIDI access is unavailable in this browser.");
+  el("connect").textContent = el("connectInput").textContent = "MIDI unavailable";
 } else if (navigator.permissions) {
   navigator.permissions
     .query({ name: "midi", sysex: false })

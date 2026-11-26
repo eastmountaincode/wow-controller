@@ -1,5 +1,6 @@
 import { LibraryClient, DeviceError, displayName } from "./library-client.js";
 import { createLibraryPreview } from "./library-preview.js";
+import { createSampleWaveform } from "./sample-waveform.js";
 
 const el = (id) => document.getElementById(id);
 const usb = navigator.usb;
@@ -11,7 +12,18 @@ let client,
   listedBank;
 let beat, profile, version, release, pendingPage, confirmationKey;
 let statusRead, pollTimer;
+let nextTrackPoll = 0, nextDeckFacts = 0;
 let mix, tracks;
+const waveform = createSampleWaveform();
+let waveSource;
+let waveInView = true;
+new IntersectionObserver(([entry]) => {
+  waveInView = entry.isIntersecting;
+  if (!waveInView) waveform.position(null);
+  schedulePoll(waveInView);
+}).observe(el("sampleWave"));
+let livePlayhead = false;
+let effect, nextEffectPoll = 0;
 let mappingCommand = "MAPPING";
 const channels = ["master", "beat", "sample"];
 const midiRear = { master: null, blend: null };
@@ -33,6 +45,90 @@ const preview = createLibraryPreview(() => client, async (error) => {
   await disconnect();
   status(error.message || "The USB connection closed.");
 }, () => statusRead);
+// Waveform reads use the same serialized USB session as sliders and library transfers.
+function syncWaveform(force = false) {
+  const key = tracks?.samples;
+  if (!force && key && waveSource?.key === key && waveSource.client === client) return;
+  if (!key && !waveSource) return;
+  waveSource?.abort?.abort();
+  waveform.clear();
+  waveSource = key && client ? { client, key, state: "pending" } : null;
+  if (waveSource) waveform.select(key, displayName(key));
+}
+
+async function pollWaveform(current) {
+  const source = waveSource;
+  if (!source || source.client !== current || document.hidden || page() !== "deck" || !waveInView) return;
+  if (source.state === "pending") {
+    const abort = new AbortController();
+    source.abort = abort;
+    source.state = "reading";
+    try {
+      const blob = await current.download("samples", { key: source.key }, () => {}, null, abort.signal, 32 * 1024 * 1024);
+      if (source !== waveSource || abort.signal.aborted) { source.state = "pending"; return; }
+      source.state = "decoding";
+      waveform.load(blob, source.key).then(ok => {
+        if (source !== waveSource) return;
+        source.state = ok ? "ready" : "error";
+        if (ok && !livePlayhead) waveform.message("Live position requires controller firmware 1.5.");
+      }).catch(() => {
+        if (source !== waveSource) return;
+        source.state = "error";
+        waveform.message("Could not decode this sample.");
+      });
+    } catch (error) {
+      if (error.name === "AbortError") { source.state = "pending"; return; }
+      if (!(error instanceof DeviceError)) throw error;
+      if (source === waveSource) {
+        source.state = "error";
+        waveform.message(error.message);
+      }
+    } finally { source.abort = null; }
+    return;
+  }
+  if (!livePlayhead || source.state !== "ready") return;
+  let position;
+  try {
+    position = JSON.parse(await query("PLAYHEAD", "PLAYHEAD"));
+  } catch (error) {
+    if (!(error instanceof DeviceError)) throw error;
+    if (/unknown command/i.test(error.message)) {
+      livePlayhead = false;
+      waveform.message("Live position requires controller firmware 1.5.");
+    }
+    waveform.position(null);
+    return;
+  }
+  if (source !== waveSource || client !== current || page() !== "deck") return;
+  const duration = position?.duration;
+  const seconds = position?.seconds;
+  if (position?.sample !== source.key || !Number.isFinite(seconds) || !Number.isFinite(duration) ||
+      duration <= 0 || seconds < 0 || seconds > duration) {
+    waveform.position(null);
+    return;
+  }
+  waveform.position(seconds / duration, seconds, duration);
+}
+
+async function readEffect(command = "EFFECT") {
+  const value = JSON.parse(await query(command, "EFFECT"));
+  if (!value || (value.enabled !== null && typeof value.enabled !== "boolean")) throw new Error("Invalid effect state.");
+  return value;
+}
+function showEffect() {
+  el("effectRow").hidden = !effect;
+  const toggle = el("deckEffect");
+  const known = typeof effect?.enabled === "boolean";
+  toggle.disabled = !known || busy;
+  toggle.checked = effect?.enabled === true;
+  toggle.indeterminate = Boolean(effect && !known);
+  el("effectValue").textContent = known ? (toggle.checked ? "On" : "Off") : "—";
+  el("effectName").textContent = ({ both: "Delay + reverb", delay: "Delay", reverb: "Reverb" })[effect?.mode] || "Effect";
+}
+el("deckEffect").addEventListener("change", event => {
+  const command = event.target.checked ? "EFFECT ON" : "EFFECT OFF";
+  run(async () => { effect = await readEffect(command); });
+});
 function eligible(device) {
   return (
     device.vendorId === filters[0].vendorId &&
@@ -60,19 +156,9 @@ function beatControls() {
   control.hidden = !connected || !beat;
   control.disabled = busy || !beat || beat.looper;
   control.textContent = known ? (beat.playing ? "Stop beat" : "Play beat") : "Play / stop beat";
-  indicator.hidden = !connected || !hasTransport || beat.looper;
-  const label = !known ? "Waiting for playback state" : beat.playing ? "Playing" : "Stopped";
-  if (indicator.textContent !== label) indicator.textContent = label;
-  indicator.dataset.live = String(known && beat.playing);
-  el("beatDetail").textContent = !connected
-    ? "Connect the deck to control its beat."
-    : !beat
-      ? "Beat control requires a firmware update in Settings."
-      : beat.looper
-        ? "Exit looper mode on the deck to control its beat."
-        : hasTransport
-          ? "Tap BEAT for the next beat. Double-tap to play or stop."
-          : "On the deck, hold BEAT and press START.";
+  const state = !connected ? "—" : beat?.looper ? "Looper mode" : !beat ? "Unavailable" :
+    !hasTransport || !known ? "—" : beat.playing ? "Playing" : "Stopped";
+  if (indicator.textContent !== state) indicator.textContent = state;
 }
 function controls() {
   const connected = Boolean(client && version);
@@ -80,13 +166,9 @@ function controls() {
     button.hidden = connected;
     button.disabled = busy || !usb;
   }
-  for (const label of document.querySelectorAll(".device-status")) {
-    label.textContent = connected ? "USB connected" : "";
-    label.dataset.live = String(connected);
-  }
   el("libraryConnect").hidden = !connected;
   el("libraryConnect").disabled = busy;
-  el("libraryIntro").hidden = connected;
+  el("libraryIntro").hidden = Boolean(usb);
   el("libraryTools").hidden = !connected;
   el("libraryTools")
     .querySelectorAll("button")
@@ -97,9 +179,10 @@ function controls() {
     .querySelectorAll("[data-bank]")
     .forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.bank === bank)));
   el("firmwareFacts").hidden = !connected;
-  el("settingsIntro").hidden = connected;
+  el("settingsIntro").hidden = Boolean(usb);
   el("pickUpdate").disabled = !connected || busy;
   beatControls();
+  showEffect();
   showMix();
   showTracks();
   el("beatStartup").disabled = busy || !beat;
@@ -110,21 +193,10 @@ function controls() {
   el("resetLamp").disabled = busy || !hasLampTest;
   el("midiProfile").disabled = busy || !profile;
   el("midiProfile").value = profile || "";
-  el("startupDescription").textContent = !connected
-    ? "Connect the deck to change its startup behavior."
-    : !beat
-      ? "Available with the controller firmware update."
-      : "Applies the next time the deck starts.";
-  el("profileDescription").textContent = !connected
-    ? "Connect the deck to change its MIDI mapping."
-    : !profile
-      ? "Available with the controller firmware update."
-      : profile === "performance"
-        ? "The platter also sends modulation (CC 1), and the pitch knob sends pitch bend."
-        : "Sends the deck’s native control values and button notes.";
   if (!usb) {
-    const warning = "This browser does not provide USB access to the deck.";
-    el("libraryIntro").textContent = el("settingsIntro").textContent = el("beatDetail").textContent = warning;
+    const warning = "USB access requires a WebUSB browser.";
+    el("libraryIntro").textContent = el("settingsIntro").textContent = warning;
+    for (const button of document.querySelectorAll("[data-usb-prompt]")) button.title = warning;
   }
   schedulePoll();
 }
@@ -139,6 +211,10 @@ async function disconnect() {
   const current = client;
   preview.stop();
   mix = tracks = undefined;
+  livePlayhead = false;
+  effect = null;
+  nextEffectPoll = 0;
+  syncWaveform();
   mappingCommand = "MAPPING";
   pendingMix.clear();
   for (const key of channels) delete el(key + "Volume").dataset.editing;
@@ -148,13 +224,13 @@ async function disconnect() {
   el("fileList").replaceChildren();
   el("emptyFolder").hidden = true;
   el("fileCount").textContent = "";
-  el("previewHint").hidden = true;
   controls();
   if (current) await current.close().catch(() => {});
 }
 async function run(action, quiet = false) {
   if (busy) return;
   busy = true;
+  waveSource?.abort?.abort();
   controls();
   if (!quiet) status("");
   try {
@@ -204,8 +280,10 @@ function schedulePoll(immediate = false) {
   clearTimeout(pollTimer);
   if (!client || busy || statusRead || document.hidden) return;
   const active = page();
-  if ((active === "deck" && (beat?.playing !== undefined || mix)) || (active === "library" && tracks))
-    pollTimer = setTimeout(poll, immediate ? 0 : active === "library" ? 1000 : 500);
+  if (active !== "deck" && active !== "library") return;
+  if (!tracks && beat?.playing === undefined && !(active === "deck" && mix)) return;
+  const interval = active === "library" ? 1000 : livePlayhead && waveInView && waveSource?.state === "ready" ? 40 : 500;
+  pollTimer = setTimeout(poll, immediate ? 0 : interval);
 }
 function poll() {
   if (!client || busy || statusRead || document.hidden) return;
@@ -215,10 +293,7 @@ function poll() {
   statusRead = pollStatus(current, active).catch(async (error) => {
     if (client !== current) return;
     if (error instanceof DeviceError) {
-      if (active === "library") {
-        tracks = { samples: null, beats: null };
-        showTracks();
-      } else if (mix) {
+      if (mix && active === "deck") {
         mix.rearMaster = mix.rearBlend = null;
         showMix();
       }
@@ -232,36 +307,61 @@ function poll() {
   });
 }
 async function pollStatus(current, active) {
-  if (active === "library" && tracks) {
-    const observed = await readTracks();
-    if (current === client && (tracks.samples !== observed.samples || tracks.beats !== observed.beats)) {
-      tracks = observed;
-      showTracks();
-    }
-    return;
-  }
-  if (active !== "deck") return;
-  if (beat?.playing !== undefined) {
+  if (active !== "deck" && active !== "library") return;
+  const now = performance.now();
+  const isDeck = active === "deck";
+  const readFacts = !isDeck || now >= nextDeckFacts;
+  if (isDeck && readFacts) nextDeckFacts = now + 500;
+  let selectionChanged = false;
+  if (tracks && (!isDeck || now >= nextTrackPoll)) {
+    nextTrackPoll = now + 1000;
+    let observed;
     try {
-      const observed = await readBeat();
-      if (current !== client) return;
-      const changed = beat.playing !== observed.playing || beat.looper !== observed.looper;
-      beat = observed;
-      if (changed) beatControls();
-    } catch (err) {
-      if (!(err instanceof DeviceError)) throw err;
-      if (current !== client) return;
-      beat.playing = null;
-      beatControls();
+      observed = await readTracks();
+    } catch (error) {
+      if (!(error instanceof DeviceError)) throw error;
+      observed = { samples: null, beats: null };
     }
+    if (current !== client) return;
+    selectionChanged = tracks.samples !== observed.samples || tracks.beats !== observed.beats;
+    tracks = observed;
   }
-  if (mix && current === client && !busy && page() === "deck") {
+  let transportChanged = false;
+  if (readFacts && beat?.playing !== undefined && !busy && page() === active) {
+    let observed;
+    try {
+      observed = await readBeat();
+    } catch (error) {
+      if (!(error instanceof DeviceError)) throw error;
+      observed = { ...beat, playing: null };
+    }
+    if (current !== client) return;
+    transportChanged = beat.playing !== observed.playing || beat.looper !== observed.looper;
+    beat = observed;
+    if (transportChanged) beatControls();
+  }
+  if (selectionChanged || transportChanged) showTracks();
+  if (!isDeck || busy || page() !== active || current !== client) return;
+  if (effect && now >= nextEffectPoll) {
+    nextEffectPoll = now + 1000;
+    try {
+      const observed = await readEffect();
+      if (current !== client) return;
+      effect = observed;
+    } catch (error) {
+      if (!(error instanceof DeviceError)) throw error;
+      if (current !== client) return;
+      effect = { ...effect, enabled: null };
+    }
+    showEffect();
+  }
+  if (readFacts && mix) {
     const observed = await readMix();
-    if (current === client) {
-      mix = observed;
-      showMix();
-    }
+    if (current !== client) return;
+    mix = observed;
+    showMix();
   }
+  if (!busy && current === client && page() === active) await pollWaveform(current);
 }
 const percentage = (value) => Number.isInteger(value) && value >= 0 && value <= 100;
 function rearPosition(value) {
@@ -282,16 +382,13 @@ async function readMix(command = "MIX") {
 }
 function showMix() {
   showRear();
-  el("mixHint").hidden = el("mixSliders").hidden = !mix;
+  el("mixSliders").hidden = !mix;
   const hasBlend = typeof mix?.blendEnabled === "boolean";
   el("blendSetting").hidden = !hasBlend;
   el("blendEnabled").disabled = !hasBlend;
   if (!mix) return;
   el("masterChannel").hidden = !percentage(mix.master);
   el("blendEnabled").checked = Boolean(pendingMix.get("blend") ?? mix.blendEnabled);
-  el("mixHint").textContent = mix.blendEnabled === false
-    ? "The rear master sets the maximum volume. The rear mix is bypassed."
-    : "The rear master sets the maximum volume. The rear mix balances the beat and sample.";
   for (const key of channels) {
     if (!percentage(mix[key])) continue;
     const slider = el(key + "Volume");
@@ -307,10 +404,10 @@ function showRear() {
   const master = rearReading(midiRear.master, mix?.rearMaster);
   const balance = rearReading(midiRear.blend, mix?.rearBlend);
   el("mixPanel").hidden = !mix && master == null && balance == null;
-  const masterLabel = percentage(master) ? master + "%" : "Awaiting reading";
+  const masterLabel = percentage(master) ? master + "%" : "—";
   const blendLabel = percentage(balance)
     ? balance + "% (" + (balance < 50 ? "beat side" : balance > 50 ? "sample side" : "center") + ")"
-    : "Awaiting reading";
+    : "—";
   if (el("rearMaster").textContent !== masterLabel) el("rearMaster").textContent = masterLabel;
   if (el("rearBlend").textContent !== blendLabel) el("rearBlend").textContent = blendLabel;
 }
@@ -411,6 +508,7 @@ async function identify() {
   const [major, minor] = String(release?.version ?? "")
     .split(".")
     .map(Number);
+  livePlayhead = major > 1 || (major === 1 && minor >= 5);
   hasLampTest = major > 1 || (major === 1 && minor >= 2);
   confirmationKey = receiptKey(client.device);
   let receipt;
@@ -445,6 +543,7 @@ async function connect(device) {
   if (el("libraryStatus").textContent === "USB disconnected.") status("");
   beat = await optional(() => readBeat());
   mix = await optional(() => readMix());
+  if (livePlayhead) effect = await optional(() => readEffect());
   mappingCommand = "MAPPING";
   profile = await optional(() => readProfile());
   if (!profile) {
@@ -481,9 +580,13 @@ async function restore() {
   }, true);
 }
 function visit(next) {
+  if (next !== "deck") {
+    waveSource?.abort?.abort();
+    waveform.position(null);
+  }
   if (next !== "library") preview.stop();
   schedulePoll(next === "library");
-  if (lampDeadline && performance.now() >= lampDeadline) finishLampTest("Normal light restored.");
+  if (lampDeadline && performance.now() >= lampDeadline) finishLampTest("");
   if (busy) {
     pendingPage = next;
     return;
@@ -507,11 +610,16 @@ el("libraryConnect").addEventListener("click", () =>
   run(async () => {
     markDisconnected(true);
     await disconnect();
-    status("USB disconnected.");
   }),
 );
 document.addEventListener("wowpage", (event) => visit(event.detail));
-document.addEventListener("visibilitychange", () => schedulePoll(true));
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    waveSource?.abort?.abort();
+    waveform.position(null);
+  }
+  schedulePoll(true);
+});
 window.addEventListener("pagehide", preview.stop);
 function finishLampTest(message) {
   clearTimeout(lampTimer);
@@ -527,14 +635,14 @@ async function readLampTest(idleMessage = "") {
     return;
   }
   clearTimeout(lampTimer);
-  el("lampStatus").textContent = test === "off" ? "Testing with the light off." : "Testing " + test + ".";
+  el("lampStatus").textContent = test === "off" ? "Testing with the light off." : "Testing " + test;
   lampDeadline = performance.now() + remainingMs;
-  lampTimer = setTimeout(() => finishLampTest("Normal light restored."), remainingMs);
+  lampTimer = setTimeout(() => finishLampTest(""), remainingMs);
 }
 async function lampCommand(reset) {
   try {
     await client.ack(reset ? "LAMP RESET" : "LAMP TEST " + el("lampColor").value);
-    await readLampTest(reset ? "Test ended." : "Normal light restored.");
+    await readLampTest();
   } catch (error) {
     if (!(error instanceof DeviceError)) throw error;
     el("lampStatus").textContent = error.message;
@@ -563,7 +671,6 @@ el("beatStartup").addEventListener("change", (event) => {
   const enabled = event.target.checked;
   run(async () => {
     beat = await readBeat("BEAT STARTUP " + (enabled ? "1" : "0"));
-    status(beat.startup ? "The beat will play on startup." : "The beat will stay off on startup.");
   });
 });
 el("midiProfile").addEventListener("change", (event) => {
@@ -571,7 +678,6 @@ el("midiProfile").addEventListener("change", (event) => {
   run(async () => {
     const wireName = selected === "performance" && mappingCommand === "PROFILE" ? "cicada" : selected;
     profile = await readProfile(mappingCommand + " " + wireName);
-    status(profile === "performance" ? "Performance MIDI mapping saved." : "Raw MIDI mapping saved.");
   });
 });
 function sizeLabel(bytes) {
@@ -596,16 +702,28 @@ async function readTracks(command = "TRACKS") {
   return value;
 }
 function showTracks() {
-  el("loadedTrack").hidden = !tracks;
-  if (!tracks) return;
-  const selected = tracks[bank];
-  const label = selected ? displayName(selected) : bank === "samples" ? "No sample reported" : "No beat reported";
-  el("loadedName").textContent = label;
+  syncWaveform();
+  const hasPlayback = beat?.playing !== undefined;
+  el("libraryDeck").hidden = !tracks && !hasPlayback;
+  el("librarySampleRow").hidden = !tracks;
+  const playback = beat?.looper ? "Looper mode" : !hasPlayback ? "" :
+    beat.playing === true ? "Playing" : beat.playing === false ? "Stopped" : "Playback unknown";
+  const beatName = tracks?.beats ? displayName(tracks.beats) : tracks ? "—" : "";
+  if (el("libraryBeatName").textContent !== beatName) el("libraryBeatName").textContent = beatName;
+  if (el("libraryBeatState").textContent !== playback) el("libraryBeatState").textContent = playback;
+  el("librarySampleName").textContent = tracks?.samples ? displayName(tracks.samples) : "—";
+  const selected = tracks?.[bank];
   for (const button of el("fileList").querySelectorAll(".file-load")) {
-    const loaded = selected === button.dataset.key;
-    const action = loaded ? "Reload" : "Load";
-    button.toggleAttribute("data-loaded", loaded);
-    button.textContent = action + " on WOW";
+    const current = selected === button.dataset.key;
+    const row = button.closest("li");
+    const marker = row.querySelector(".file-state");
+    if (current) row.setAttribute("aria-current", "true");
+    else row.removeAttribute("aria-current");
+    marker.hidden = !current;
+    const knownPlayback = bank === "beats" && !beat?.looper && typeof beat?.playing === "boolean";
+    marker.textContent = current ? (knownPlayback ? playback : "Loaded") : "";
+    const action = current ? "Reload" : "Load";
+    button.textContent = action;
     button.setAttribute("aria-label", action + " " + button.dataset.name + " on the WOW");
     button.disabled = busy;
   }
@@ -625,7 +743,7 @@ async function loadTrack(folder, entry) {
     throw err;
   }
   if (tracks[folder] !== entry.key) throw new DeviceError("The WOW did not confirm loading " + entry.name + ".");
-  status("Loaded " + entry.name + " on the WOW.");
+  status("");
 }
 async function refreshList() {
   const folder = bank;
@@ -654,6 +772,7 @@ async function refreshList() {
         () =>
           run(async () => {
             await client.ack("DELETE " + folder + " " + entry.key);
+            if (folder === "samples" && waveSource?.key === entry.key) syncWaveform(true);
             await refreshList();
             status("Deleted " + entry.name + ".");
           }),
@@ -663,19 +782,22 @@ async function refreshList() {
     const actions = document.createElement("div");
     actions.className = "file-actions";
     if (tracks) {
-      const load = actionButton("Load on WOW", entry.name, () => run(() => loadTrack(folder, entry)));
+      const marker = document.createElement("small");
+      marker.className = "file-state";
+      marker.hidden = true;
+      name.append(marker);
+      const load = actionButton("Load", entry.name, () => run(() => loadTrack(folder, entry)));
       load.className = "file-load";
       load.dataset.key = entry.key;
       load.dataset.name = entry.name;
       actions.append(load);
     }
-    actions.append(actionButton("Save", entry.name, () => run(() => save(folder, entry))), remove);
+    actions.append(actionButton("Download", entry.name, () => run(() => save(folder, entry))), remove);
     row.append(preview.button(folder, entry), name, actions);
     return row;
   });
   el("fileList").replaceChildren(...rows);
   el("emptyFolder").hidden = rows.length > 0;
-  el("previewHint").hidden = !rows.length;
   el("fileCount").textContent = entries.length + (entries.length === 1 ? " file" : " files");
   listedBank = folder;
 }
@@ -736,7 +858,6 @@ document.querySelectorAll("[data-bank]").forEach((button) =>
     el("fileList").replaceChildren();
     el("emptyFolder").hidden = true;
     el("fileCount").textContent = "";
-    el("previewHint").hidden = true;
     run(refreshList);
   }),
 );
@@ -753,6 +874,7 @@ el("audioFiles").addEventListener("change", (event) => {
         status("Adding " + file.name + "…");
         fileProgress(0, file.size);
         await client.upload(folder, file, fileProgress);
+        if (folder === "samples" && waveSource && displayName(waveSource.key) === file.name) syncWaveform(true);
         completed++;
       }
     } catch (err) {
