@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Deck — WOW Controller</title>
+    <link rel="stylesheet" href="./controller.css" />
+    <link rel="stylesheet" href="./deck-model.css" />
+  </head>
+  <body>
+    <a class="skip" href="#workspace">Skip to controls</a>
+    <div class="shell">
+      <aside class="rail">
+        <a href="#deck" class="brand" aria-label="WOW Controller home">
+          <strong>WOW</strong>
+          <span>Controller</span>
+        </a>
+        <nav aria-label="Controller pages" id="pages">
+          <a href="#deck" aria-current="page">
+            <i class="icon icon-deck" aria-hidden="true"></i>
+            Deck
+          </a>
+          <a href="#library">
+            <i class="icon icon-library" aria-hidden="true"></i>
+            Library
+          </a>
+          <a href="#instruments">
+            <i class="icon icon-instruments" aria-hidden="true"></i>
+            MIDI
+          </a>
+          <a href="#settings">
+            <i class="icon icon-settings" aria-hidden="true"></i>
+            Settings
+          </a>
+        </nav>
+        <div class="rail-device">
+          <span>HeadacheSound</span>
+          <strong>WOW Machine</strong>
+        </div>
+      </aside>
+      <main id="workspace" tabindex="-1">
+        <section data-page="deck" aria-labelledby="deckTitle">
+          <header class="page-head">
+            <h1 id="deckTitle">Deck</h1>
+            <div class="head-actions">
+              <span id="status" role="status">MIDI disconnected</span>
+              <button id="connect" class="primary">Connect MIDI</button>
+            </div>
+          </header>
+          <figure class="deck-stage" aria-label="Live WOW Machine"><div id="deckModel"></div></figure>
+          <dl class="readouts">
+            <div>
+              <dt>Platter</dt>
+              <dd>
+                <span id="speed">—</span>
+                <small id="rpmUnit" hidden>rpm</small>
+                <small id="angle" aria-label="Platter angle" title="Platter angle"></small>
+              </dd>
+            </div>
+            <div>
+              <dt>Motor</dt>
+              <dd id="motor">—</dd>
+            </div>
+            <div>
+              <dt>Pitch position</dt>
+              <dd>
+                <span id="pitch">—</span>
+                <small id="pitchUnit" hidden>%</small>
+              </dd>
+            </div>
+            <div>
+              <dt>Fader</dt>
+              <dd id="fader">—</dd>
+            </div>
+          </dl>
+          <section class="block playback" aria-labelledby="beatTitle">
+            <div class="setting-row">
+              <div>
+                <h2 id="beatTitle">Onboard beat</h2>
+                <p id="beatDetail">Connect the deck to control its beat.</p>
+              </div>
+              <div class="head-actions">
+                <button class="device-connect" data-usb-prompt>Connect deck</button>
+                <span id="beatPlayback" role="status" aria-label="Beat playback" hidden></span>
+                <button id="beatToggle" class="primary" hidden>Play / stop beat</button>
+              </div>
+            </div>
+          </section>
+          <section id="mixPanel" class="block" aria-labelledby="mixTitle" hidden>
+            <h2 id="mixTitle">Volume</h2>
+            <p id="mixHint">The rear knobs set the maximum level.</p>
+            <div id="mixSliders" class="mix-controls">
+              <div class="mix-channel" id="masterChannel" hidden>
+                <label for="masterVolume">Master volume</label>
+                <output id="masterLevel" for="masterVolume" aria-hidden="true">100%</output>
+                <input type="range" id="masterVolume" min="0" max="100" step="1" value="100" aria-describedby="mixHint" />
+              </div>
+              <div class="mix-channel">
+                <label for="beatVolume">Beat volume</label>
+                <output id="beatLevel" for="beatVolume" aria-hidden="true">100%</output>
+                <input type="range" id="beatVolume" min="0" max="100" step="1" value="100" aria-describedby="mixHint" />
+              </div>
+              <div class="mix-channel">
+                <label for="sampleVolume">Sample volume</label>
+                <output id="sampleLevel" for="sampleVolume" aria-hidden="true">100%</output>
+                <input type="range" id="sampleVolume" min="0" max="100" step="1" value="100" aria-describedby="mixHint" />
+              </div>
+            </div>
+            <dl class="rear-levels" aria-label="Physical knob positions">
+              <div><dt>Rear master</dt><dd id="rearMaster">Awaiting reading</dd></div>
+              <div><dt>Rear mix</dt><dd id="rearBlend">Awaiting reading</dd></div>
+            </dl>
+          </section>
+        </section>
+
+        <section data-page="library" aria-labelledby="libraryTitle" hidden>
+          <header class="page-head">
+            <h1 id="libraryTitle">Library</h1>
+            <div class="head-actions">
+              <span class="device-status"></span>
+              <button class="device-connect" data-usb-prompt>Connect deck</button>
+            </div>
+          </header>
+          <div id="libraryTools" hidden>
+            <div class="library-bar">
+              <div class="bank-switch" role="group" aria-label="Library folder">
+                <button data-bank="samples" aria-pressed="true">Samples</button>
+                <button data-bank="beats" aria-pressed="false">Beats</button>
+              </div>
+              <button id="addFiles" class="primary">Add files</button>
+              <input type="file" id="audioFiles" accept=".wav,.mp3" multiple hidden />
+            </div>
+            <progress id="transferProgress" aria-label="File transfer" hidden></progress>
+            <div id="loadedTrack" class="loaded-track" hidden>
+              <span>Loaded on WOW</span>
+              <strong id="loadedName">Awaiting selection</strong>
+            </div>
+            <div class="list-head">
+              <div class="list-summary">
+                <strong id="fileCount"></strong>
+                <span id="previewHint" hidden>Previews play in this browser.</span>
+              </div>
+              <button id="refreshBank" class="text-button">Refresh</button>
+            </div>
+            <ul id="fileList" aria-label="Audio files"></ul>
+            <p id="emptyFolder" hidden>This folder is empty.</p>
+            <template id="previewTemplate">
+              <div class="file-preview" role="group">
+                <div class="preview-main">
+                  <span class="preview-state" role="status">Loading browser preview…</span>
+                  <progress aria-label="Loading browser preview"></progress>
+                  <audio controls preload="none" hidden></audio>
+                </div>
+                <button type="button" class="text-button preview-stop">Cancel</button>
+              </div>
+            </template>
+          </div>
+          <p id="libraryIntro" class="empty-state">Connect the deck to manage its samples and beats.</p>
+        </section>
+
+        <section data-page="instruments" aria-labelledby="instrumentsTitle" hidden>
+          <header class="page-head"><h1 id="instrumentsTitle">MIDI</h1></header>
+          <section class="midi-output">
+            <h2>Connect an instrument</h2>
+            <p>Choose <strong>WOW MIDI Controller</strong> as the MIDI input in your instrument. The deck sends controls on channel 1. Your instrument supplies the sound.</p>
+            <details class="mapping">
+              <summary>MIDI messages</summary>
+              <table>
+                <thead><tr><th scope="col">Control</th><th scope="col">Raw MIDI</th><th scope="col">Performance MIDI</th></tr></thead>
+                <tbody>
+                  <tr><th scope="row">Platter</th><td>CC 16 + 48</td><td>CC 16 + 48 and modulation (CC 1)</td></tr>
+                  <tr><th scope="row">Pitch</th><td>CC 19 + 51</td><td>CC 19 + 51 and pitch bend</td></tr>
+                  <tr><th scope="row">Left / right fader sensors</th><td>CC 17 + 49 / 18 + 50</td><td>CC 17 + 49 / 18 + 50</td></tr>
+                  <tr><th scope="row">Fader end stops</th><td>CC 22</td><td>CC 104</td></tr>
+                  <tr><th scope="row">Motor</th><td>CC 20</td><td>CC 102</td></tr>
+                  <tr><th scope="row">Held buttons</th><td>CC 21</td><td>CC 103</td></tr>
+                  <tr><th scope="row">Start, Beat, Sample, Cue 1–4</th><td>Notes 36–42</td><td>Notes 36–42</td></tr>
+                  <tr><th scope="row">Start light and RGB levels</th><td>CC 105–108</td><td>CC 105–108</td></tr>
+                  <tr><th scope="row">Rear master / mix <small>(firmware 1.4+)</small></th><td>CC 23 + 55 / 24 + 56</td><td>CC 23 + 55 / 24 + 56</td></tr>
+                </tbody>
+              </table>
+              <p>Choose the output mapping in <a href="#settings">Settings</a>.</p>
+            </details>
+          </section>
+          <div class="instrument-row">
+            <div>
+              <h2>Platter synth</h2>
+              <p>
+                Spin the platter or tap a button to play this browser synth. Pitch transposes the notes and
+                the fader changes the tone.
+              </p>
+            </div>
+            <button id="sound" aria-pressed="false">Enable synth</button>
+          </div>
+        </section>
+
+        <section data-page="settings" aria-labelledby="settingsTitle" hidden>
+          <header class="page-head">
+            <h1 id="settingsTitle">Settings</h1>
+            <div class="head-actions">
+              <span class="device-status"></span>
+              <button class="device-connect" data-usb-prompt>Connect deck</button>
+            </div>
+          </header>
+          <section class="settings-group">
+            <h2>Playback</h2>
+            <div id="blendSetting" class="setting-row" hidden>
+              <div>
+                <label for="blendEnabled">Use rear mix knob</label>
+                <p id="blendDescription">Switch off to control the beat and sample balance with the volume sliders.</p>
+              </div>
+              <input id="blendEnabled" type="checkbox" switch role="switch" aria-describedby="blendDescription" disabled />
+            </div>
+            <div class="setting-row">
+              <div>
+                <label for="beatStartup">Play beat on startup</label>
+                <p id="startupDescription">Applies the next time the deck starts.</p>
+              </div>
+              <input
+                id="beatStartup"
+                type="checkbox"
+                role="switch"
+                aria-describedby="startupDescription"
+                disabled
+              />
+            </div>
+          </section>
+          <section class="settings-group">
+            <h2>MIDI</h2>
+            <div class="setting-row">
+              <div><label for="ports">Monitor input</label></div>
+              <div class="head-actions">
+                <select id="ports" hidden disabled>
+                  <option value="">No MIDI input</option>
+                </select>
+                <button id="connectInput">Connect MIDI</button>
+              </div>
+            </div>
+            <div class="setting-row">
+              <div>
+                <label for="midiProfile">Output mapping</label>
+                <p id="profileDescription">Choose how the deck controls your instrument.</p>
+              </div>
+              <select id="midiProfile" aria-describedby="profileDescription" disabled>
+                <option value="" disabled>Choose mapping</option>
+                <option value="raw">Raw MIDI</option>
+                <option value="performance">Performance MIDI</option>
+              </select>
+            </div>
+          </section>
+          <section id="lampSettings" class="settings-group" aria-labelledby="lampTitle" hidden>
+            <h2 id="lampTitle">START light</h2>
+            <p id="lampHelp">Test the light for four seconds, then return to the deck’s normal color.</p>
+            <div class="lamp-actions">
+              <label for="lampColor">Color</label>
+              <select id="lampColor" aria-describedby="lampHelp">
+                <option value="red">Red</option>
+                <option value="green">Green</option>
+                <option value="blue">Blue</option>
+                <option value="white">White</option>
+                <option value="off">Off</option>
+              </select>
+              <button id="testLamp">Test light</button>
+              <button id="resetLamp" class="text-button" hidden>End test</button>
+            </div>
+            <p id="lampStatus" class="notice" role="status"></p>
+          </section>
+          <section class="settings-group">
+            <h2>Firmware</h2>
+            <p id="settingsIntro">Connect the deck to see its installed version.</p>
+            <dl id="firmwareFacts" class="detail-list" hidden>
+              <div>
+                <dt>Version</dt>
+                <dd id="firmwareVersion"></dd>
+              </div>
+              <div id="releaseDateRow" hidden>
+                <dt>Release date</dt>
+                <dd id="releaseDate"></dd>
+              </div>
+              <div id="confirmedDateRow" hidden>
+                <dt>Last update confirmed</dt>
+                <dd id="confirmedDate"></dd>
+              </div>
+              <div>
+                <dt>Release ID</dt>
+                <dd id="firmwareReading" class="mono"></dd>
+              </div>
+            </dl>
+            <div class="settings-actions">
+              <button id="pickUpdate" disabled>Load firmware update</button>
+              <button id="libraryConnect" class="text-button" hidden>Disconnect deck</button>
+            </div>
+            <input type="file" id="updateFile" accept=".upd" hidden />
+            <progress id="updateProgress" aria-label="Firmware upload" hidden></progress>
+          </section>
+        </section>
+        <p id="libraryStatus" class="notice" role="status"></p>
+      </main>
+    </div>
+    <dialog id="libraryDialog" aria-labelledby="confirmTitle">
+      <form method="dialog">
+        <h2 id="confirmTitle"></h2>
+        <p id="confirmText"></p>
+        <div class="dialog-actions">
+          <button value="cancel" autofocus>Cancel</button>
+          <button id="confirmAction" class="primary" value="confirm"></button>
+        </div>
+      </form>
+    </dialog>
+    <script type="module" src="./navigation.js"></script>
+    <script type="module" src="./monitor.js"></script>
+    <script type="module" src="./library.js"></script>
+  </body>
+</html>
