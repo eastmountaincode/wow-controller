@@ -15,6 +15,7 @@ let mix, tracks;
 let mappingCommand = "MAPPING";
 const channels = ["master", "beat", "sample"];
 const midiRear = { master: null, blend: null };
+let usbDecks = new Set();
 const pendingMix = new Map();
 let writingMix = false;
 let hasLampTest = false;
@@ -38,6 +39,11 @@ function eligible(device) {
     device.productId === filters[0].productId &&
     device.productName === "WOW MIDI Controller"
   );
+}
+async function authorizedDecks() {
+  const devices = (await usb.getDevices()).filter(eligible);
+  usbDecks = new Set(devices);
+  return devices;
 }
 function markDisconnected(value) {
   manuallyDisconnected = value;
@@ -298,8 +304,8 @@ function showMix() {
   }
 }
 function showRear() {
-  const master = mix ? mix.rearMaster : midiRear.master;
-  const balance = mix ? mix.rearBlend : midiRear.blend;
+  const master = rearReading(midiRear.master, mix?.rearMaster);
+  const balance = rearReading(midiRear.blend, mix?.rearBlend);
   el("mixPanel").hidden = !mix && master == null && balance == null;
   const masterLabel = percentage(master) ? master + "%" : "Awaiting reading";
   const blendLabel = percentage(balance)
@@ -308,10 +314,23 @@ function showRear() {
   if (el("rearMaster").textContent !== masterLabel) el("rearMaster").textContent = masterLabel;
   if (el("rearBlend").textContent !== blendLabel) el("rearBlend").textContent = blendLabel;
 }
+function rearReading(midi, usbPosition) {
+  if (!midi) return usbPosition;
+  if (!client) return midi.value;
+  // The WOW repeats both positions every 500 ms. Let USB take over if one stops.
+  if (midi.soleWowInput && usbDecks.size === 1 && usbDecks.has(client.device) &&
+      performance.now() - midi.time < 1500) return midi.value;
+  return usbPosition;
+}
 document.addEventListener("wowrear", ({ detail }) => {
-  if (detail) midiRear[detail.key] = rearPosition(detail.raw);
-  else midiRear.master = midiRear.blend = null;
-  if (!mix) showRear();
+  if (detail) {
+    midiRear[detail.key] = {
+      value: rearPosition(detail.raw),
+      soleWowInput: detail.soleWowInput,
+      time: performance.now(),
+    };
+  } else midiRear.master = midiRear.blend = null;
+  showRear();
 });
 function flushMix() {
   if (busy || writingMix || !client || !mix || !pendingMix.size) return;
@@ -414,6 +433,7 @@ async function identify() {
 }
 async function connect(device) {
   if (!eligible(device)) throw new DeviceError("Choose the WOW MIDI Controller.");
+  usbDecks.add(device);
   client = new LibraryClient(device);
   try {
     await client.open();
@@ -443,7 +463,7 @@ async function connect(device) {
 }
 async function choose() {
   let device;
-  const authorized = (await usb.getDevices()).filter(eligible);
+  const authorized = await authorizedDecks();
   try {
     device = authorized.length === 1 ? authorized[0] : await usb.requestDevice({ filters });
   } catch (err) {
@@ -456,7 +476,7 @@ async function choose() {
 async function restore() {
   if (!usb || busy || client || manuallyDisconnected || page() === "instruments") return;
   await run(async () => {
-    const devices = (await usb.getDevices()).filter(eligible);
+    const devices = await authorizedDecks();
     if (devices.length === 1) await connect(devices[0]);
   }, true);
 }
@@ -775,13 +795,19 @@ el("updateFile").addEventListener("change", (event) => {
   );
 });
 usb?.addEventListener("disconnect", (event) => {
+  usbDecks.delete(event.device);
+  showRear();
   if (client?.device !== event.device) return;
   if (el("libraryDialog").open) el("libraryDialog").close("cancel");
   disconnect();
   status("USB disconnected.");
 });
 usb?.addEventListener("connect", (event) => {
-  if (eligible(event.device)) restore();
+  if (eligible(event.device)) {
+    usbDecks.add(event.device);
+    showRear();
+    restore();
+  }
 });
 controls();
 restore();

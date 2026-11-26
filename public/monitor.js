@@ -30,6 +30,8 @@ let access,
   distance = 0,
   frame = 0;
 let hasFaderMask = false;
+let soleWowInput = false;
+const looksLikeWow = (port) => /wow|headachesound|midi gadget|f_midi/i.test(port.name + " " + port.manufacturer);
 // At physical noon the original 3-o’clock artwork was rotated 270 degrees.
 const ticksPerTurn = 16384;
 const noonTicks = 3 * ticksPerTurn / 4;
@@ -127,7 +129,9 @@ function incoming(event) {
       if (base === 16) angle(number, event.timeStamp);
       if (base === 19) state.pitch = voice.pitch = raw;
       if (base === 23 || base === 24) {
-        document.dispatchEvent(new CustomEvent("wowrear", { detail: { key: base === 23 ? "master" : "blend", raw } }));
+        document.dispatchEvent(new CustomEvent("wowrear", {
+          detail: { key: base === 23 ? "master" : "blend", raw, soleWowInput },
+        }));
         return;
       }
       if (!hasFaderMask && base === 17) setStop("left", raw > 3671);
@@ -144,11 +148,18 @@ setInterval(() => {
 }, 100);
 
 function listen(port) {
+  // Web MIDI and WebUSB have no shared device ID. Pair only an explicitly
+  // named WOW when no second WOW (including generic gadget ports) is present.
+  const soleWow = Boolean(port && /\bWOW MIDI Controller\b/i.test(port.name) &&
+    [...access.inputs.values()].filter((p) => p.state === "connected" && looksLikeWow(p)).length === 1);
+  if (current !== port || soleWowInput !== soleWow) {
+    soleWowInput = soleWow;
+    document.dispatchEvent(new CustomEvent("wowrear", { detail: null }));
+  }
   if (current !== port) {
     if (current) current.onmidimessage = null;
     current = port;
     reset();
-    document.dispatchEvent(new CustomEvent("wowrear", { detail: null }));
     if (port) port.onmidimessage = incoming;
     state.connected = Boolean(port);
     changed();
@@ -161,7 +172,7 @@ function listPorts() {
   const select = el("ports");
   const active =
     ports.find((p) => p.id === select.value) ??
-    ports.find((p) => /wow|headachesound|midi gadget|f_midi/i.test(p.name + " " + p.manufacturer));
+    ports.find(looksLikeWow);
   select.replaceChildren(new Option("Choose MIDI input", ""), ...ports.map((p) => new Option(p.name, p.id)));
   select.value = active?.id ?? "";
   select.disabled = !ports.length;
