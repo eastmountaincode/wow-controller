@@ -1,0 +1,23 @@
+#!/bin/ash
+store=/wow-controller
+media=/var/nona
+mkdir -p "$store"
+# BEAT alone always starts the card's built-in controller for recovery.
+if [ "${1:-}" != rescue ] && [ -f "$media/WOWCTRL.UPD" ]; then
+    /bin/wow-update "$media/WOWCTRL.UPD" "$store"
+    status=$?
+    case "$status" in
+        0) mv -f "$media/WOWCTRL.UPD" "$media/WOWCTRL.APPLIED" ;;
+        2) mv -f "$media/WOWCTRL.UPD" "$media/WOWCTRL.REJECTED" ;;
+    esac
+    sync
+fi
+if [ "${1:-}" != rescue ] && [ -x "$store/active/wow-midi-mode" ]; then
+    WOW_BIN="$store/$(readlink "$store/active")"
+    export WOW_BIN
+    "$WOW_BIN/wow-midi-mode" && exit 0
+    echo "Starting the built-in controller after the selected release exited."
+fi
+WOW_BIN=/bin
+export WOW_BIN
+exec /bin/wow-midi-mode

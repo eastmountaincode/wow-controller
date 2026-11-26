@@ -1,3 +1,10 @@
+backup
+build
+controller
+media
+.env*
+HARDWARE.md
+README.md
 ._*
 **/._*
 .DS_Store

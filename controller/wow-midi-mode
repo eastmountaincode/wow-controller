@@ -1,0 +1,120 @@
+#!/bin/ash
+# The deck keeps its media mounted while the host receives class-compliant MIDI.
+set -eu
+g=/sys/kernel/config/usb_gadget/wow_controller
+udc=musb-hdrc.1.auto
+bin=${WOW_BIN:-/bin}
+manager_pid=
+ffs=/dev/wow-library
+
+cleanup() {
+    result=$?
+    set +e
+    if [ "$result" != 0 ]; then
+        echo "Controller startup stopped during: $stage (exit $result)"
+        echo "USB state: $(cat /sys/class/udc/$udc/state 2>/dev/null)"
+        ls /dev/snd 2>/dev/null
+        sync
+    fi
+    if [ -d "$g" ]; then
+        if [ -n "$(cat "$g/UDC")" ]; then echo "" > "$g/UDC"; fi
+        if [ -n "$manager_pid" ]; then kill "$manager_pid" 2>/dev/null; wait "$manager_pid" 2>/dev/null; fi
+        rm -f "$g/configs/c.1/library" "$g/configs/c.1/midi.usb0"
+        umount "$ffs" 2>/dev/null
+        rmdir "$g/functions/ffs.library" 2>/dev/null
+        rmdir "$g/functions/midi.usb0" "$g/configs/c.1/strings/0x409" \
+              "$g/configs/c.1" "$g/strings/0x409" "$g" 2>/dev/null
+    fi
+    rm -f /dev/wow-midi-pty
+    ln -sf /dev/ttyS1 /dev/mcu
+}
+# Apply the persisted beat preference before the factory engine reads its
+# settings. Its live BEAT + START gesture is only valid outside looper mode.
+export WOW_BEAT_CONTROL=0
+if WOW_BEAT_STARTUP=$("$bin/wow-library" --prepare-beat); then
+    export WOW_BEAT_CONTROL=1
+elif [ "$?" = 3 ]; then
+    export WOW_BEAT_CONTROL=looper
+fi
+export WOW_BEAT_STARTUP
+# Install the adapter embedded in this signed release alongside the binaries.
+# USB MIDI and the library can start independently if the keyboard is unavailable.
+if "$bin/wow-usb" --prepare-keyboard "$bin"; then
+    export WOW_KEYBOARD_ADAPTER="$bin/wow-keyboard.so"
+fi
+stage="switching USB to peripheral mode"
+trap cleanup EXIT
+echo "WOW USB controller, default MIDI boot"
+echo peripheral > /sys/devices/platform/soc/1c19000.usb/musb-hdrc.1.auto/mode
+stage="mounting configfs"
+grep -qs ' /sys/kernel/config configfs ' /proc/mounts || mount -t configfs none /sys/kernel/config
+stage="creating the USB gadget"
+mkdir "$g"
+mkdir "$g/configs/c.1" "$g/strings/0x409" "$g/configs/c.1/strings/0x409"
+echo 0x1d6b > "$g/idVendor"
+echo 0x0100 > "$g/idProduct"
+echo "WOW MIDI Controller" > "$g/strings/0x409/product"
+echo "HeadacheSound" > "$g/strings/0x409/manufacturer"
+echo "wow-controller-local" > "$g/strings/0x409/serialnumber"
+echo "MIDI" > "$g/configs/c.1/strings/0x409/configuration"
+echo 120 > "$g/configs/c.1/MaxPower"
+stage="creating the MIDI function"
+mkdir "$g/functions/midi.usb0"
+printf %s WOWCtrl > "$g/functions/midi.usb0/id"
+ln -s "$g/functions/midi.usb0" "$g/configs/c.1/midi.usb0"
+# FunctionFS gives the library its own vendor interface alongside normal MIDI.
+stage="starting the library interface"
+start_library() {
+    mkdir "$g/functions/ffs.library" || return 1
+    mkdir -p "$ffs" || return 1
+    mount -t functionfs library "$ffs" || return 1
+    "$bin/wow-usb" "$bin/wow-library" &
+    manager_pid=$!
+    tries=0
+    while [ ! -e "$ffs/ep2" ]; do
+        kill -0 "$manager_pid" 2>/dev/null || return 1
+        [ "$tries" -lt 50 ] || return 1
+        usleep 20000
+        tries=$((tries+1))
+    done
+    ln -s "$g/functions/ffs.library" "$g/configs/c.1/library"
+}
+if ! start_library; then echo "Library interface unavailable; starting MIDI."; fi
+stage="binding the USB device controller"
+if ! echo "$udc" > "$g/UDC"; then
+    [ -L "$g/configs/c.1/library" ] || exit 1
+    rm "$g/configs/c.1/library"
+    echo "Composite bind failed; trying MIDI alone."
+    echo "$udc" > "$g/UDC"
+fi
+echo "Bound USB MIDI on $udc."
+
+stage="mounting the factory engine's serial relay"
+mkdir -p /dev/pts
+grep -qs ' /dev/pts devpts ' /proc/mounts || mount -t devpts devpts /dev/pts
+stage="opening the gadget's ALSA MIDI port"
+i=0
+while [ "$i" -lt 30 ]; do
+    port=
+    for card in /sys/class/sound/card[0-9]* /proc/asound/card[0-9]*; do
+        [ -f "$card/id" ] && [ "$(cat "$card/id")" = WOWCtrl ] || continue
+        port="/dev/snd/midiC${card##*/card}D0"
+        [ -c "$port" ] && break
+    done
+    if [ ! -c "$port" ]; then
+        # The onboard audio codec has no raw MIDI interface.
+        set -- /dev/snd/midiC*D0
+        if [ "$#" = 1 ] && [ -c "$1" ]; then port=$1; fi
+    fi
+    if [ -c "$port" ]; then
+        stage="reading the deck controls"
+        echo "Using $port."
+        sync
+        "$bin/wow-midi" "$port"
+        exit $?
+    fi
+    i=$((i+1))
+    /bin/busybox usleep 100000
+done
+echo "The USB MIDI function did not create an ALSA port." >&2
+exit 1
