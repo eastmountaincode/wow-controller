@@ -22,7 +22,7 @@ new IntersectionObserver(([entry]) => {
   if (!waveInView) waveform.position(null);
   schedulePoll(waveInView);
 }).observe(el("sampleWave"));
-let livePlayhead = false;
+let livePlayhead = false, hasEffects = false;
 let effect, nextEffectPoll = 0;
 let mappingCommand = "MAPPING";
 const channels = ["master", "beat", "sample"];
@@ -70,7 +70,7 @@ async function pollWaveform(current) {
       waveform.load(blob, source.key).then(ok => {
         if (source !== waveSource) return;
         source.state = ok ? "ready" : "error";
-        if (ok && !livePlayhead) waveform.message("Live position requires controller firmware 1.5.");
+        if (ok && !livePlayhead) waveform.message("Live position requires firmware 1.5.1 or later.");
       }).catch(() => {
         if (source !== waveSource) return;
         source.state = "error";
@@ -94,7 +94,7 @@ async function pollWaveform(current) {
     if (!(error instanceof DeviceError)) throw error;
     if (/unknown command/i.test(error.message)) {
       livePlayhead = false;
-      waveform.message("Live position requires controller firmware 1.5.");
+      waveform.message("Live position requires firmware 1.5.1 or later.");
     }
     waveform.position(null);
     return;
@@ -104,9 +104,18 @@ async function pollWaveform(current) {
   const seconds = position?.seconds;
   if (position?.sample !== source.key || !Number.isFinite(seconds) || !Number.isFinite(duration) ||
       duration <= 0 || seconds < 0 || seconds > duration) {
-    waveform.position(null);
+    const now = performance.now();
+    source.missingSince ??= now;
+    if ((position?.sample && position.sample !== source.key) || now - source.missingSince >= 120) waveform.position(null);
+    if (now - source.missingSince >= 1000 && !source.positionNotice) {
+      waveform.message("Waiting for the deck’s sample position.");
+      source.positionNotice = true;
+    }
     return;
   }
+  if (source.positionNotice) waveform.message("");
+  source.positionNotice = false;
+  source.missingSince = undefined;
   waveform.position(seconds / duration, seconds, duration);
 }
 
@@ -211,7 +220,7 @@ async function disconnect() {
   const current = client;
   preview.stop();
   mix = tracks = undefined;
-  livePlayhead = false;
+  livePlayhead = hasEffects = false;
   effect = null;
   nextEffectPoll = 0;
   syncWaveform();
@@ -505,10 +514,11 @@ function receiptKey(device) {
 async function identify() {
   version = await query("VERSION", "OK");
   release = await optional(getRelease);
-  const [major, minor] = String(release?.version ?? "")
+  const [major, minor, patch = 0] = String(release?.version ?? "")
     .split(".")
     .map(Number);
-  livePlayhead = major > 1 || (major === 1 && minor >= 5);
+  hasEffects = major > 1 || (major === 1 && minor >= 5);
+  livePlayhead = major > 1 || (major === 1 && (minor > 5 || (minor === 5 && patch >= 1)));
   hasLampTest = major > 1 || (major === 1 && minor >= 2);
   confirmationKey = receiptKey(client.device);
   let receipt;
@@ -543,7 +553,7 @@ async function connect(device) {
   if (el("libraryStatus").textContent === "USB disconnected.") status("");
   beat = await optional(() => readBeat());
   mix = await optional(() => readMix());
-  if (livePlayhead) effect = await optional(() => readEffect());
+  if (hasEffects) effect = await optional(() => readEffect());
   mappingCommand = "MAPPING";
   profile = await optional(() => readProfile());
   if (!profile) {

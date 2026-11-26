@@ -1,4 +1,4 @@
-"""Create the motor/FX split for one verified WOW audio engine, at build time."""
+"""Build the performance controls for one verified WOW audio engine, at build time."""
 import gzip
 import hashlib
 from pathlib import Path
@@ -7,7 +7,7 @@ import subprocess
 
 
 STOCK_SHA256 = "26e08d4431ce563a530decd40bf56f001efc3a92a23407c64f75222db67873af"
-PERFORMANCE_SHA256 = "afd4b6c90f97e2d589d93e4bd410e32a1493243c855bed68da861427c3944633"
+PERFORMANCE_SHA256 = "2c5d3c24b438ecf0b7c4646fedc51a21c9df6a0787378c233fa9f17938b495f9"
 
 
 def factory_audio_engine(executable, system_image, work):
@@ -41,6 +41,12 @@ def performance_engine(stock):
     )
     # FX completes via the normal return, independently of the motor code.
     engine[0xe0ac:0xe0ae] = bytes.fromhex("62e7")  # b 0xdf74
+    # A plain BEAT release selects the next file. Both native C++ release
+    # handlers already check the BEAT modifier before reaching these branches.
+    # Use their original loadBeat(index+1) and writeLastTrackId paths while
+    # preserving the play flag, including when the backing beat is stopped.
+    engine[0xfa00:0xfa02] = bytes.fromhex("02e0")  # b 0xfa08 (deck handler)
+    engine[0xfac2:0xfac4] = bytes.fromhex("01e0")  # b 0xfac8 (keyboard thunk)
     engine[0x180:0x194] = hashlib.sha1(engine).digest()  # distinct GNU build ID
     if hashlib.sha256(engine).hexdigest() != PERFORMANCE_SHA256:
         raise ValueError("Unexpected performance audio engine fingerprint")

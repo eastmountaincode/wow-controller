@@ -22,12 +22,12 @@ enum { WOW_ENGINE_UNKNOWN, WOW_ENGINE_STOCK, WOW_ENGINE_PERFORMANCE };
 /* These two known executables have identical audio objects and renderer layout.
  * Match the build ID and all bytes, independently of the active slot path.
  * Stock SHA-256: 26e08d4431ce563a530decd40bf56f001efc3a92a23407c64f75222db67873af
- * Performance:   afd4b6c90f97e2d589d93e4bd410e32a1493243c855bed68da861427c3944633 */
+ * Performance:   2c5d3c24b438ecf0b7c4646fedc51a21c9df6a0787378c233fa9f17938b495f9 */
 static inline int wow_beat_factory_image(int fd) {
     static const uint8_t stock[] = {0x89,0x29,0x7c,0x1f,0xe2,0x75,0x6a,0xeb,0xac,0xfb,
                                     0xe3,0x31,0x26,0xd9,0xb9,0x79,0x9a,0x4d,0xb9,0xe8};
-    static const uint8_t performance[] = {0xed,0xb3,0xa6,0x92,0x9b,0x49,0xe6,0x0a,0xac,0x22,
-                                          0x8c,0x76,0x0d,0x9e,0x58,0x86,0x18,0x1b,0x74,0x6a};
+    static const uint8_t performance[] = {0xf0,0xda,0xa8,0x8b,0xc7,0x20,0x40,0x05,0x18,0x5e,
+                                          0x71,0x66,0x19,0x67,0x38,0x0e,0x46,0xbf,0xa8,0x7a};
     uint8_t id[sizeof stock], buf[4096];
     struct stat file;
     if (fstat(fd, &file) || file.st_size != 169640 ||
@@ -39,7 +39,7 @@ static inline int wow_beat_factory_image(int fd) {
         expected = UINT32_C(0xfa00346f);
     } else if (!memcmp(id, performance, sizeof id)) {
         kind = WOW_ENGINE_PERFORMANCE;
-        expected = UINT32_C(0x1ed1f768);
+        expected = UINT32_C(0x752e8abc);
     } else return WOW_ENGINE_UNKNOWN;
 
     uint32_t hash = UINT32_C(2166136261);

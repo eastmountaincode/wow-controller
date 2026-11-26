@@ -5,13 +5,13 @@
 #include <stdint.h>
 
 enum { WOW_BEAT_KEY = 165, WOW_START_KEY = 164, WOW_SAMPLE_KEY = 163 };
-enum { WOW_TAP_MS = 225, WOW_DOUBLE_GAP_MS = 260 };
-enum beat_phase { BEAT_IDLE, BEAT_FIRST_DOWN, BEAT_GAP, BEAT_SECOND_DOWN, BEAT_PASSTHROUGH };
+enum { WOW_TAP_MS = 225, WOW_DOUBLE_GAP_MS = 260, WOW_HOLD_GUARD_MS = 950 };
+enum beat_phase { BEAT_IDLE, BEAT_FIRST_DOWN, BEAT_GAP, BEAT_SECOND_DOWN, BEAT_HELD, BEAT_PASSTHROUGH };
 struct wow_keys {
     enum beat_phase phase;
-    uint64_t deadline;
+    uint64_t deadline, down_at;
     unsigned char physical[96];
-    int held;
+    int held, single_toggles;
 };
 
 typedef void (*wow_emit_key)(unsigned code, int value);
@@ -34,17 +34,33 @@ static void wow_transport_chord(int beat_already_down, wow_emit_key emit) {
     emit(WOW_BEAT_KEY, 0);
 }
 
-/* Resolve the deferred first release. When a second press has turned into
- * a hold or a chord, return its original press to the engine as well. */
-static void wow_finish_taps(struct wow_keys *k, wow_emit_key emit) {
-    if (k->phase == BEAT_GAP || k->phase == BEAT_SECOND_DOWN) emit(WOW_BEAT_KEY, 0);
+/* Only a completed first tap may toggle transport. A hold, pitch edit or
+ * input overrun instead ends the native key at its real release boundary. */
+static int wow_pitch_edited(void);
+static void wow_end_taps(struct wow_keys *k, wow_emit_key emit, int toggle) {
+    if (k->phase == BEAT_GAP || k->phase == BEAT_SECOND_DOWN) {
+        if (toggle && k->single_toggles) wow_transport_chord(1, emit);
+        else emit(WOW_BEAT_KEY, 0);
+    }
     if (k->phase == BEAT_SECOND_DOWN) emit(WOW_BEAT_KEY, 1);
     k->phase = wow_physical_key(k, WOW_BEAT_KEY) ? BEAT_PASSTHROUGH : BEAT_IDLE;
     k->deadline = 0;
 }
 
+static void wow_finish_taps(struct wow_keys *k, wow_emit_key emit) {
+    wow_end_taps(k, emit, 1);
+}
+
 static void wow_key_tick(struct wow_keys *k, uint64_t now, wow_emit_key emit) {
-    if (k->deadline && now >= k->deadline) wow_finish_taps(k, emit);
+    if (k->phase == BEAT_IDLE || k->phase == BEAT_PASSTHROUGH) return;
+    if (k->single_toggles && wow_pitch_edited()) {
+        wow_end_taps(k, emit, 0);
+        return;
+    }
+    if (!k->deadline || now < k->deadline) return;
+    int held = k->phase == BEAT_FIRST_DOWN || k->phase == BEAT_SECOND_DOWN;
+    wow_finish_taps(k, emit);
+    if (held && k->single_toggles) k->phase = BEAT_HELD;
 }
 
 static void wow_route_key(struct wow_keys *k, unsigned code, int value,
@@ -65,6 +81,7 @@ static void wow_route_key(struct wow_keys *k, unsigned code, int value,
     wow_track_key(k, code, value);
     if (was_down == !!value) return;
     if (value) {
+        k->down_at = now;
         if (k->phase == BEAT_GAP) {
             k->phase = BEAT_SECOND_DOWN;
             k->deadline = now + WOW_TAP_MS;
@@ -77,11 +94,16 @@ static void wow_route_key(struct wow_keys *k, unsigned code, int value,
         k->phase = BEAT_GAP;
         k->deadline = now + WOW_DOUBLE_GAP_MS;
     } else if (k->phase == BEAT_SECOND_DOWN) {
-        wow_transport_chord(1, emit);
+        if (k->single_toggles) emit(code, 0); /* Native next keeps the transport state. */
+        else wow_transport_chord(1, emit);
         k->phase = BEAT_IDLE;
         k->deadline = 0;
     } else {
-        emit(code, 0);
+        /* An ordinary press can outlast the tap window. Leave genuine
+         * factory holds and button combinations to their existing handlers. */
+        if (k->phase == BEAT_HELD && now - k->down_at < WOW_HOLD_GUARD_MS)
+            wow_transport_chord(1, emit);
+        else emit(code, 0);
         k->phase = BEAT_IDLE;
         k->deadline = 0;
     }

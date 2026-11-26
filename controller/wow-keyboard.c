@@ -80,6 +80,7 @@ __attribute__((constructor)) static void keyboard_init(void) {
     link_state = mmap(NULL, sizeof *link_state, PROT_READ | PROT_WRITE, MAP_SHARED, pagefd, 0);
     if (link_state == MAP_FAILED) { link_state = NULL; return; }
     commands = pipefd;
+    keys.single_toggles = performance_keys;
     atomic_store(&link_state->beat_mute_until_ms,0);
     atomic_store(&link_state->beat_mute_pid,0);
     cursor_start();
@@ -96,6 +97,10 @@ __attribute__((destructor)) static void keyboard_exit(void) {
         int mine = getpid();
         atomic_compare_exchange_strong(&link_state->engine_pid, &mine, 0);
     }
+}
+
+static int wow_pitch_edited(void) {
+    return link_state && atomic_load(&link_state->pitch_watch) == -2;
 }
 
 static void queue_key(unsigned code, int value) {
@@ -121,8 +126,10 @@ static void observe_edge(const struct input_event *ev, uint64_t now) {
             atomic_store(&link_state->pitch_watch, atomic_load(&link_state->pitch));
         } else {
             int watch = atomic_exchange(&link_state->pitch_watch, -1);
-            if (engine_beat && !beat_consumed && playing != 1)
-                playing = watch >= 0 ? 1 : -1;
+            if (engine_beat && !beat_consumed && playing != 1) {
+                if (now - beat_down_ms >= WOW_HOLD_GUARD_MS || watch < 0) playing = -1;
+                else if (!keys.single_toggles) playing = 1;
+            }
             engine_beat = 0;
         }
     } else if (ev->code == WOW_SAMPLE_KEY) {
@@ -130,7 +137,7 @@ static void observe_edge(const struct input_event *ev, uint64_t now) {
     } else if (ev->code == WOW_START_KEY && ev->value && engine_beat && !beat_consumed) {
         /* Once the stock long-hold callback fires it consumes BEAT and starts
          * or selects a beat. The exact boundary depends on its 200 ms tick. */
-        if (now - beat_down_ms >= 950) playing = -1;
+        if (now - beat_down_ms >= WOW_HOLD_GUARD_MS) playing = -1;
         else if (!engine_sample && playing >= 0) playing ^= 1;
         beat_consumed = 1;
         if (engine_sample) engine_sample = 0; /* calibration unpresses SAMPLE */
@@ -142,7 +149,7 @@ static int current_beat(void) {
     audio_observed = observed == 0 || observed == 1;
     if (audio_observed) playing = observed;
     else if (engine_beat && !beat_consumed && playing != 1 &&
-             beat_time_ns() / 1000000 - beat_down_ms >= 950) return -1;
+             beat_time_ns() / 1000000 - beat_down_ms >= WOW_HOLD_GUARD_MS) return -1;
     return playing;
 }
 
@@ -294,7 +301,7 @@ static ssize_t routed_read(int fd, void *buffer) {
             /* Drain any physically deferred release before resuming native
              * reads. If our parent exits, the ordinary deck stays playable. */
             interrupt_selection();
-            wow_finish_taps(&keys, queue_key);
+            wow_end_taps(&keys, queue_key, 0);
             close(commands);
             commands = -1;
             atomic_store(&link_state->engine_pid, 0);
@@ -305,7 +312,7 @@ static ssize_t routed_read(int fd, void *buffer) {
             ssize_t n = ordinary_read(fd, &stamp, sizeof stamp);
             if (n != sizeof stamp) return n;
             if (stamp.type == EV_SYN && stamp.code == SYN_DROPPED) {
-                wow_finish_taps(&keys, queue_key);
+                wow_end_taps(&keys, queue_key, 0);
                 playing = -1;
                 stream_dropped = 1;
             } else if (stream_dropped) {

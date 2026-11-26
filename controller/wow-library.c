@@ -329,7 +329,7 @@ static void remove_audio(int dir, const char *name) {
     ok();
 }
 
-#define WOW_VERSION "1.5.0"
+#define WOW_VERSION "1.5.1"
 #ifndef WOW_BUILD_UTC
 #define WOW_BUILD_UTC "development"
 #endif
@@ -565,9 +565,12 @@ static void print_track_key(const char *name) {
 }
 
 static void playhead(void) {
-    struct wow_playhead value;
+    signal(SIGPIPE, SIG_IGN);
+    struct wow_playhead value = {0};
     if (!wow_playhead_read(&value)) {
-        puts("PLAYHEAD {\"sample\":null,\"seconds\":null,\"duration\":null}");
+        static const char *const reasons[] = {"invalid", "offline", "timeout", "decoding", "track", "length", "changing"};
+        const char *reason = value.status < sizeof reasons / sizeof *reasons ? reasons[value.status] : "invalid";
+        printf("PLAYHEAD {\"sample\":null,\"seconds\":null,\"duration\":null,\"reason\":\"%s\"}\n", reason);
         return;
     }
     fputs("PLAYHEAD {\"sample\":", stdout);

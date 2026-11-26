@@ -43,18 +43,8 @@ static void cursor_start(void) {
     cursor_memory = open("/proc/self/mem", O_RDONLY | O_CLOEXEC);
     if (cursor_memory < 0) return;
     cursor_base = (uint32_t)base;
-    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-    if (fd >= 0) {
-        struct stat st;
-        if (lstat(WOW_PLAYHEAD_SOCKET, &st) == 0 && S_ISSOCK(st.st_mode) && st.st_uid == geteuid())
-            unlink(WOW_PLAYHEAD_SOCKET);
-        if (bind(fd, (const struct sockaddr *)&wow_playhead_address, sizeof wow_playhead_address) == 0 &&
-            chmod(WOW_PLAYHEAD_SOCKET, 0600) == 0 && listen(fd, 2) == 0) {
-            cursor_listener = fd;
-            return;
-        }
-        close(fd);
-    }
+    if (mkfifo(WOW_PLAYHEAD_FIFO, 0600) == 0 || errno == EEXIST)
+        cursor_listener = wow_cursor_open_fifo(WOW_PLAYHEAD_FIFO, O_RDWR);
 #endif
 }
 
@@ -65,14 +55,22 @@ static void cursor_snapshot(struct wow_playhead *out) {
     double position, confirm;
     uint32_t length;
     uint8_t loading;
-    if (slot->decoded == 1 && cursor_objects(&before) &&
-        before.audio != slot->previous_audio && (!slot->audio_object || before.audio == slot->audio_object) &&
-        cursor_field(before.audio, 16, &length, sizeof length) && length && length == slot->frames &&
-        cursor_field(before.audio, 21, &loading, 1) && !loading &&
-        cursor_field(before.state, 32, &position, sizeof position) &&
-        cursor_field(before.state, 32, &confirm, sizeof confirm) && position == confirm &&
-        cursor_objects(&after) && memcmp(&before, &after, sizeof before) == 0 &&
-        position >= -(double)UINT32_MAX && position <= UINT32_MAX) {
+    if (slot->decoded != 1) {
+        out->status = WOW_CURSOR_DECODING;
+    } else if (!cursor_objects(&before) || before.audio == slot->previous_audio ||
+               (slot->audio_object && before.audio != slot->audio_object)) {
+        out->status = WOW_CURSOR_TRACK;
+    } else if (!cursor_field(before.audio, 16, &length, sizeof length) || !length || length != slot->frames) {
+        out->status = WOW_CURSOR_LENGTH;
+    } else if (!cursor_field(before.audio, 21, &loading, 1) || loading) {
+        out->status = WOW_CURSOR_DECODING;
+    } else if (!cursor_field(before.state, 32, &position, sizeof position) ||
+               !cursor_field(before.state, 32, &confirm, sizeof confirm) || position != confirm ||
+               !cursor_objects(&after) || memcmp(&before, &after, sizeof before) ||
+               !(position >= -(double)UINT32_MAX && position <= UINT32_MAX)) {
+        out->status = WOW_CURSOR_MOVING;
+    } else {
+        out->status = WOW_CURSOR_READY;
         /* The worker may finish decoding a short file before loadSample
          * installs its new TrackState. Bind only once that object is live. */
         slot->audio_object = before.audio;
@@ -90,11 +88,16 @@ static void cursor_snapshot(struct wow_playhead *out) {
 }
 
 static void cursor_request(void) {
-    int fd = accept(cursor_listener, NULL, NULL);
+    struct wow_cursor_request request;
+    if (read(cursor_listener, &request, sizeof request) != sizeof request || !request.pid) return;
+    char path[PATH_MAX];
+    wow_cursor_reply_path(path, request);
+    /* Keeping our read end open avoids SIGPIPE if USB disconnects during the snapshot. */
+    int fd = wow_cursor_open_fifo(path, O_RDWR);
     if (fd < 0) return;
     struct wow_playhead result = {0};
     cursor_snapshot(&result);
-    (void)send(fd, &result, sizeof result, MSG_DONTWAIT | MSG_NOSIGNAL);
+    (void)write(fd, &result, sizeof result);
     close(fd);
 }
 #endif
