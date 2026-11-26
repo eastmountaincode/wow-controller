@@ -21,6 +21,7 @@
 #include "wow-keyboard-link.h"
 #include "wow-keyboard-router.h"
 #include "wow-keyboard-tracks.h"
+#include "wow-keyboard-effects.h"
 
 #if defined(__arm__) && defined(__linux__)
 _Static_assert(sizeof(struct input_event) == 16, "The factory reads the 32-bit evdev ABI");
@@ -61,7 +62,15 @@ __attribute__((constructor)) static void keyboard_init(void) {
     ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
     if (n < 0) return;
     exe[n] = 0;
-    if (strcmp(exe, "/bin/wowmachine")) return;
+    if (strcmp(exe, "/bin/wowmachine")) {
+        const char *performance = getenv("WOW_PERFORMANCE_ENGINE");
+        if (!performance || strcmp(exe, performance)) return;
+        int image = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
+        if (image < 0) return;
+        performance_keys = wow_beat_factory_image(image) == WOW_ENGINE_PERFORMANCE;
+        close(image);
+        if (!performance_keys) return;
+    }
     int pipefd = inherited_fd("WOW_KEYBOARD_COMMAND_FD");
     int pagefd = inherited_fd("WOW_KEYBOARD_SENSOR_FD");
     struct stat pipe_stat, page_stat;
@@ -73,6 +82,7 @@ __attribute__((constructor)) static void keyboard_init(void) {
     commands = pipefd;
     atomic_store(&link_state->beat_mute_until_ms,0);
     atomic_store(&link_state->beat_mute_pid,0);
+    cursor_start();
     track_start();
     (void)fcntl(pipefd, F_SETFD, FD_CLOEXEC);
     close(pagefd);
@@ -186,8 +196,22 @@ static void read_command(int keyboard_fd) {
     beat_reply_path(path, req);
     reply_fd = open(path, O_WRONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW);
     if (reply_fd < 0) return;
-    if (selection.phase!=LOAD_IDLE) { answer('H'); return; }
     if (msg.engine_pid != getpid()) { answer('N'); return; }
+    if (req->action == WOW_EFFECT_QUERY) { answer(current_effect()); return; }
+    if (selection.phase!=LOAD_IDLE) { answer('H'); return; }
+    if (req->action == WOW_EFFECT_ON || req->action == WOW_EFFECT_OFF) {
+        char state = current_effect();
+        if (state == 'U' || ((state - 'a') % 2) == (req->action == WOW_EFFECT_ON)) {
+            answer(state); return;
+        }
+        struct pollfd target = {.fd=reply_fd, .events=POLLOUT};
+        if (beat_time_ns() > req->expires_ns || poll(&target, 1, 0) != 1 ||
+            (target.revents & (POLLERR | POLLHUP | POLLNVAL))) { answer('T'); return; }
+        pending_effect = req->action;
+        queue_key(WOW_PANEL_FX_KEY, 1);
+        queue_key(WOW_PANEL_FX_KEY, 0);
+        return;
+    }
     if (req->action == WOW_BEAT_QUERY) { answer(beat_result(current_beat())); return; }
     if (req->action != WOW_BEAT_PLAY && req->action != WOW_BEAT_STOP &&
         req->action != WOW_BEAT_TOGGLE) { answer('I'); return; }
@@ -215,6 +239,7 @@ static void resync_keys(int fd) {
     unsigned char held[sizeof keys.physical] = {0};
     if (ioctl(fd, EVIOCGKEY(sizeof held), held) < 0) return;
     for (unsigned code = 0; code <= KEY_MAX; ++code) {
+        if (performance_keys && code == WOW_PANEL_FX_KEY) continue;
         int down = !!(held[code / 8] & (1u << (code % 8)));
         if (down == !!wow_physical_key(&keys, code)) continue;
         wow_track_key(&keys, code, down);
@@ -237,8 +262,14 @@ static ssize_t routed_read(int fd, void *buffer) {
         first = count = 0;
         if (resync_batch || stream_dropped) { playing = -1; resync_batch = 0; }
         if (reply_fd >= 0) {
-            char result = beat_result(current_beat());
-            answer(result == 'U' && acknowledge_toggle ? 'K' : result);
+            if (pending_effect) {
+                char state = current_effect();
+                answer(state != 'U' && ((state - 'a') % 2) == (pending_effect == WOW_EFFECT_ON) ? state : 'U');
+                pending_effect = 0;
+            } else {
+                char result = beat_result(current_beat());
+                answer(result == 'U' && acknowledge_toggle ? 'K' : result);
+            }
         }
         if (deferred_physical) {
             deferred_physical=0;
@@ -255,8 +286,9 @@ static ssize_t routed_read(int fd, void *buffer) {
         if (count) continue;
         int timeout = keys.deadline ? (int)(keys.deadline - now) : -1;
         if (selection.phase!=LOAD_IDLE && (timeout<0 || timeout>16)) timeout=16;
-        struct pollfd source[] = {{fd,POLLIN,0}, {commands,POLLIN,0}, {track_listener,POLLIN,0}};
-        int ready = poll(source, 3, timeout);
+        struct pollfd source[] = {{fd,POLLIN,0}, {commands,POLLIN,0}, {track_listener,POLLIN,0},
+                                  {cursor_listener,POLLIN,0}};
+        int ready = poll(source, sizeof source / sizeof *source, timeout);
         if (ready < 0 && errno == EINTR) continue;
         if (ready < 0 || (source[1].revents & (POLLHUP | POLLERR | POLLNVAL))) {
             /* Drain any physically deferred release before resuming native
@@ -279,6 +311,7 @@ static ssize_t routed_read(int fd, void *buffer) {
             } else if (stream_dropped) {
                 if (stamp.type == EV_SYN && stamp.code == SYN_REPORT) resync_keys(fd);
             } else if (stamp.type == EV_KEY) {
+                if (performance_keys && stamp.code == WOW_PANEL_FX_KEY) continue;
                 if (selection.phase!=LOAD_IDLE && selection.phase!=LOAD_END) {
                     interrupt_selection();
                     physical_edge=stamp;
@@ -294,6 +327,7 @@ static ssize_t routed_read(int fd, void *buffer) {
         }
         if (source[1].revents & POLLIN) read_command(fd);
         else if (source[2].revents & POLLIN) track_request(fd);
+        else if (source[3].revents & POLLIN) cursor_request();
     }
 }
 

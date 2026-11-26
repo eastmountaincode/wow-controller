@@ -423,7 +423,10 @@ int main(int argc, char **argv) {
         enable_factory_keyboard(&keyboard);
         int console = open("/dev/console",O_WRONLY);
         if (console >= 0) { dup2(console,STDOUT_FILENO); dup2(console,STDERR_FILENO); close(console); }
-        execl("/bin/serve","serve","wowmachine",(char *)NULL);
+        const char *performance = getenv("WOW_PERFORMANCE_ENGINE");
+        const char *engine = keyboard.command[0] >= 0 && performance && !access(performance, X_OK)
+                             ? performance : "/bin/wowmachine";
+        execl("/bin/serve","serve",engine,(char *)NULL);
         _exit(127);
     }
     if (keyboard.command[0] >= 0) close(keyboard.command[0]);

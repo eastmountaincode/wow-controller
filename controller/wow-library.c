@@ -26,6 +26,7 @@
 #include "wow-mix.h"
 #include "wow-beat-ipc.h"
 #include "wow-tracks.h"
+#include "wow-playhead.h"
 #include "wow-preferences.h"
 
 #ifndef WOW_MEDIA_ROOT
@@ -328,7 +329,7 @@ static void remove_audio(int dir, const char *name) {
     ok();
 }
 
-#define WOW_VERSION "1.4.0"
+#define WOW_VERSION "1.5.0"
 #ifndef WOW_BUILD_UTC
 #define WOW_BUILD_UTC "development"
 #endif
@@ -497,6 +498,23 @@ static void beat_command(char **v, int n) {
            measured ? "\"mixer\"" : known ? "\"controls\"" : "null");
 }
 
+static void effect_command(char **v, int n) {
+    unsigned action = WOW_EFFECT_QUERY;
+    if (n == 2 && !strcmp(v[1], "ON")) action = WOW_EFFECT_ON;
+    else if (n == 2 && !strcmp(v[1], "OFF")) action = WOW_EFFECT_OFF;
+    else if (n != 1) { error("Choose EFFECT ON or OFF"); return; }
+    signal(SIGPIPE, SIG_IGN);
+    char state = request_beat_action(action);
+    if (state < 'a' || state > 'f') {
+        if (action == WOW_EFFECT_QUERY) puts("EFFECT {\"enabled\":null,\"mode\":null}");
+        else error(state == 'H' ? "The deck is loading a track" : "The deck could not confirm the effect");
+        return;
+    }
+    const char *modes[] = {"reverb", "delay", "both"};
+    printf("EFFECT {\"enabled\":%s,\"mode\":\"%s\"}\n",
+           ((state - 'a') % 2) ? "true" : "false", modes[(state - 'a') / 2]);
+}
+
 static void mix_command(char **v, int n) {
     struct wow_mix mix = wow_mix_settings();
     if (n != 1) {
@@ -544,6 +562,18 @@ static void print_track_key(const char *name) {
     if (!*name) { fputs("null", stdout); return; }
     encode64((const unsigned char *)name, strlen(name));
     printf("\"%s\"", encoded);
+}
+
+static void playhead(void) {
+    struct wow_playhead value;
+    if (!wow_playhead_read(&value)) {
+        puts("PLAYHEAD {\"sample\":null,\"seconds\":null,\"duration\":null}");
+        return;
+    }
+    fputs("PLAYHEAD {\"sample\":", stdout);
+    print_track_key(value.sample);
+    printf(",\"seconds\":%.6f,\"duration\":%.6f}\n",
+           (double)value.frame / WOW_ENGINE_RATE, (double)value.length / WOW_ENGINE_RATE);
 }
 
 static void tracks(void) {
@@ -607,9 +637,11 @@ static void command(char **v, int n) {
     if ((n == 1 || n == 2) && (!strcmp(v[0],"MAPPING") || !strcmp(v[0],"PROFILE"))) {
         midi_profile(n == 2 ? v[1] : NULL, !strcmp(v[0],"PROFILE")); return;
     }
+    if (n == 1 && !strcmp(v[0],"PLAYHEAD")) { playhead(); return; }
     if (n == 1 && !strcmp(v[0],"TRACKS")) { tracks(); return; }
     if (!strcmp(v[0],"MIX")) { mix_command(v, n); return; }
     if (!strcmp(v[0],"BEAT")) { beat_command(v, n); return; }
+    if (!strcmp(v[0],"EFFECT")) { effect_command(v, n); return; }
     if (n == 2 && !strcmp(v[0],"STAGE")) { begin(root,"WOWCTRL.UPD",v[1],1); return; }
     int dir = n >= 2 ? resolve_bank(v[1]) : -1;
     if (dir < 0) { error("Unknown command or bank"); return; }

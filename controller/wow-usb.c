@@ -12,6 +12,7 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include "wow-keyboard-payload.h"
+#include "wow-performance-payload.h"
 #include <unistd.h>
 
 /* FunctionFS remaps the interface and endpoint numbers inside the composite
@@ -86,37 +87,37 @@ static pid_t start_session(const char *program) {
     return pid;
 }
 
-/* The card's existing updater verifies exactly four signed components. Bundle
- * the adapter in this one, and materialize it before the engine starts. */
-static int prepare_keyboard(const char *directory) {
+/* Keep the four-component update format used on existing cards. Materialize
+ * only the fixed, signed contents of this release in its own slot. */
+static int prepare_payload(const char *directory, const char *name, const char *next,
+                           const unsigned char *payload, size_t size, mode_t mode) {
     if (chdir(directory) < 0) return 1;
-    const char *name = "wow-keyboard.so", *next = ".wow-keyboard.so.next";
     struct stat st;
     int fd = open(name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     size_t at = 0;
     if (fd >= 0) {
-        if (!fstat(fd, &st) && S_ISREG(st.st_mode) && st.st_size == sizeof wow_keyboard_payload) {
+        if (!fstat(fd, &st) && S_ISREG(st.st_mode) && (st.st_mode & 0777) == mode && st.st_size == (off_t)size) {
             unsigned char buf[4096];
-            while (at < sizeof wow_keyboard_payload) {
+            while (at < size) {
                 ssize_t n = read(fd, buf, sizeof buf);
                 if (n < 0 && errno == EINTR) continue;
-                if (n <= 0 || memcmp(buf, wow_keyboard_payload + at, (size_t)n)) break;
+                if (n <= 0 || memcmp(buf, payload + at, (size_t)n)) break;
                 at += (size_t)n;
             }
         }
         close(fd);
-        if (at == sizeof wow_keyboard_payload) return 0;
+        if (at == size) return 0;
     }
     if (unlink(next) && errno != ENOENT) return 1;
-    fd = open(next, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
+    fd = open(next, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode);
     if (fd < 0) return 1;
-    for (at = 0; at < sizeof wow_keyboard_payload;) {
-        ssize_t n = write(fd, wow_keyboard_payload + at, sizeof wow_keyboard_payload - at);
+    for (at = 0; at < size;) {
+        ssize_t n = write(fd, payload + at, size - at);
         if (n < 0 && errno == EINTR) continue;
         if (n <= 0) break;
         at += (size_t)n;
     }
-    int failed = at != sizeof wow_keyboard_payload || fsync(fd);
+    int failed = at != size || fchmod(fd,mode) || fsync(fd);
     if (close(fd) || failed || rename(next, name)) { unlink(next); return 1; }
     int dir = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (dir < 0) return 1;
@@ -126,7 +127,12 @@ static int prepare_keyboard(const char *directory) {
 }
 
 int main(int argc,char **argv) {
-    if (argc == 3 && !strcmp(argv[1], "--prepare-keyboard")) return prepare_keyboard(argv[2]);
+    if (argc == 3 && !strcmp(argv[1], "--prepare-keyboard"))
+        return prepare_payload(argv[2], "wow-keyboard.so", ".wow-keyboard.so.next",
+                               wow_keyboard_payload, sizeof wow_keyboard_payload, 0644);
+    if (argc == 3 && !strcmp(argv[1], "--prepare-performance"))
+        return prepare_payload(argv[2], "wow-performance", ".wow-performance.next",
+                               wow_performance_payload, sizeof wow_performance_payload, 0755);
     if(argc!=2 || chdir("/dev/wow-library")) return 1;
     int ep=open("ep0",O_RDWR|O_CLOEXEC);
     if(ep<0 || !register_function(ep)) { perror("register WOW Library USB"); return 1; }

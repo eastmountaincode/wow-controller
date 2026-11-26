@@ -39,8 +39,16 @@ fi
 export WOW_BEAT_STARTUP
 # Install the adapter embedded in this signed release alongside the binaries.
 # USB MIDI and the library can start independently if the keyboard is unavailable.
+unset WOW_PERFORMANCE_ENGINE
 if "$bin/wow-usb" --prepare-keyboard "$bin"; then
     export WOW_KEYBOARD_ADAPTER="$bin/wow-keyboard.so"
+    # Only the matching factory board revision runs the signed performance engine.
+    # Drive mode, looper mode and older slots still launch the factory executable.
+    if [ "$WOW_BEAT_CONTROL" = 1 ] && \
+       echo "26e08d4431ce563a530decd40bf56f001efc3a92a23407c64f75222db67873af  /bin/wowmachine" | /bin/sha256sum -c - >/dev/null && \
+       "$bin/wow-usb" --prepare-performance "$bin"; then
+        export WOW_PERFORMANCE_ENGINE="$bin/wow-performance"
+    fi
 fi
 stage="switching USB to peripheral mode"
 trap cleanup EXIT

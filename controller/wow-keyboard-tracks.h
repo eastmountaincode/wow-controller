@@ -14,7 +14,12 @@
 #define WOW_NATIVE_IDS "/var/wow"
 #endif
 static const char *const track_dirs[2] = {WOW_TRACK_MEDIA "/beats", WOW_TRACK_MEDIA "/samples"};
-struct factory_track { char name[256]; int index, decoded; unsigned gen; };
+struct factory_track {
+    char name[256];
+    int index, decoded;
+    unsigned gen;
+    uint32_t frames, audio_object, previous_audio;
+};
 static struct factory_track factory_tracks[2];
 static pthread_mutex_t track_lock = PTHREAD_MUTEX_INITIALIZER;
 static int track_listener = -1, track_enabled;
@@ -24,11 +29,13 @@ static int filter_bank;
 static char filter_name[256];
 enum { TRACK_ALL, TRACK_ONLY, TRACK_THROUGH };
 static _Thread_local DIR *directory_finished;
-static _Thread_local struct { unsigned gen; int bank, audio; FILE *stream; } decoder;
+static _Thread_local struct { unsigned gen; int bank, audio; uint64_t frames; FILE *stream; } decoder;
 static int (*factory_vprintf)(int, const char *, va_list);
 static size_t (*factory_fread)(void *,size_t,size_t,FILE *);
 static int (*factory_pclose)(FILE *);
 static struct dirent64 *(*factory_readdir)(DIR *);
+
+#include "wow-keyboard-playhead.h"
 
 static void track_public_snapshot(void) {
     /* Caller holds track_lock. Rename makes the pair coherent for library
@@ -89,6 +96,14 @@ static void track_diagnostic(const char *fmt, va_list args) {
     pthread_mutex_lock(&track_lock);
     struct factory_track *slot = &factory_tracks[bank];
     if ((sample || beat) && bank == sample) {
+        if (bank == TRACK_SAMPLE) {
+            /* loadSample logs *before* allocating the new track, and keeps
+             * the previous object alive until the replacement is installed. */
+            struct cursor_track current;
+            slot->previous_audio = cursor_objects(&current) ? current.audio : slot->audio_object;
+            slot->audio_object = 0;
+            slot->frames = 0;
+        }
         strcpy(slot->name,name);
         slot->index = index;
         slot->decoded = 0;
@@ -98,6 +113,7 @@ static void track_diagnostic(const char *fmt, va_list args) {
         decoder.bank = bank;
         decoder.gen = slot->gen;
         decoder.audio = 0;
+        decoder.frames = 0;
         decoder.stream = NULL;
     }
     pthread_mutex_unlock(&track_lock);
@@ -124,6 +140,7 @@ size_t fread(void *buf, size_t size, size_t nmemb, FILE *stream) {
     if (decoder.gen && size==4 && (!decoder.stream || decoder.stream==stream)) {
         decoder.stream = stream;
         if (n) decoder.audio = 1;
+        decoder.frames += n;
     }
     return n;
 }
@@ -139,6 +156,8 @@ int pclose(FILE *stream) {
         struct factory_track *slot = &factory_tracks[decoder.bank];
         if (slot->gen == decoder.gen) {
             slot->decoded = complete && status==0 ? 1 : -1;
+            if (decoder.bank == TRACK_SAMPLE)
+                slot->frames = decoder.frames <= UINT32_MAX ? (uint32_t)decoder.frames : 0;
             track_public_snapshot();
         }
         decoder.gen = 0;

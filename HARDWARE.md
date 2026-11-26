@@ -14,15 +14,17 @@ To use a different instrument, select **WOW MIDI Controller** as its MIDI input 
 
 | What you want to do | Control |
 | --- | --- |
-| Listen to a file on your computer | Open **Library**, choose **Samples** or **Beats**, and press the play button beside a WAV or MP3. You can pause, seek or stop in the same row. |
-| Select a track for the WOW | Choose **Load on WOW** beside a sample or beat. The loaded track is marked in its bank. Start or stop the backing beat on **Deck**. |
+| Listen to a file on your computer | Open **Library**, choose **Samples** or **Beats**, and press the play button beside a WAV or MP3. You can pause, seek or stop in the same row. The WOW keeps its own selection and transport state. |
+| Select a track for the WOW | Choose **Load** beside the file. Both banks show the sample and beat selected on the deck, and whether the beat is playing. **Reload** loads the current file again. |
 | Add or remove files | Use **Library** to upload, download or delete files. MIDI can stay connected during a transfer. |
 | Start or stop the backing beat | Choose **Play beat** or **Stop beat** on **Deck**. Double-tap **BEAT** on the hardware to toggle playback. A single tap starts playback or advances to the next beat. The transport works in normal playback mode. |
+| Scratch with the waveform | On **Deck**, the waveform shows the loaded sample. The playhead uses the audio engine’s current position and follows forward motion, reverse motion and cue jumps. |
+| Control the platter and effects | Press **START** to start or stop the motor. In normal playback with firmware 1.5, each press changes the motor immediately, including two presses close together. The **Deck** switch controls the configured delay, reverb or both. Looper mode keeps its factory controls. |
 | Start quietly | Turn off **Play beat on startup** in **Settings**. The deck saves the change for its next normal power-on. |
 | Adjust the deck's output | Set the physical rear master to your preferred upper limit. Adjust the **Master**, **Beat** and **Sample** levels on **Deck**. To control the balance entirely from the site, turn off **Use rear mix knob** in **Settings**. Both rear knob positions remain visible. The browser's library preview has its own volume. |
-| Check the START light | In **Settings**, choose a color or **Off** and select **Test light**. The factory pattern resumes after four seconds, or immediately when you select **End test**. |
+| Check the START light | In **Settings**, choose a color or **Off** and select **Test for 4 seconds**. The factory pattern resumes after four seconds, or immediately when you select **End test**. |
 
-Track selection, rear-knob readouts and the rear mix bypass require controller firmware 1.4 or later. **Settings** shows the version and release ID reported by the connected deck.
+The live playhead and separate effect control require firmware 1.5 or later. Firmware 1.4 supports the sample waveform, track selection, rear-knob readings and rear mix bypass. **Settings** shows the version and release ID reported by the connected deck.
 
 ## Update a deck with the custom updater
 
@@ -35,7 +37,7 @@ If the browser cannot reach the library, hold **SAMPLE alone** while powering on
 
 ## Starting with a factory card
 
-A stock deck needs a one-time installation on its internal microSD before it can accept this project's USB updates. Development and earlier hardware tests used one WOW revision. The version 1.4.0 first-install image and the rebuilt factory image still need a physical boot test.
+A stock deck needs a one-time installation on its internal microSD before it can accept this project's USB updates. Development and earlier hardware tests used one WOW revision. The distributable first-install and factory partition images have been checked offline. A physical boot from those two images is still unverified.
 
 ### Identify your card
 
@@ -58,7 +60,7 @@ The **original raw factory partition** has size `134217728` and SHA-256 `68163fa
 
 ### Install the controller partition
 
-1. Download `WOW-controller-1.4.0-system.img.gz` and the release checksums. Verify the compressed file against the entry with its exact filename. Decompress it, confirm the resulting image is 134,217,728 bytes, and record the SHA-256 of that decompressed file. [Latest release](https://github.com/eastmountaincode/wow-controller/releases/latest)
+1. Download `WOW-controller-1.5.0-system.img.gz` and the release checksums. Verify the compressed file against the entry with its exact filename. Decompress it, confirm the resulting image is 134,217,728 bytes, and record the SHA-256 of that decompressed file. [Latest release](https://github.com/eastmountaincode/wow-controller/releases/latest)
 2. Confirm the target is the same card you backed up. Unmount its volumes and use a partition imaging tool to write the decompressed image **only to partition 1**, the Linux system partition. A whole-card write would overwrite the boot area and partition table.
 3. Flush the write, then read back all 134,217,728 bytes of partition 1 into a new file. Check that this file has the same size and SHA-256 as the decompressed image used in step 1. If either differs, keep the card out of the deck. Restore partition 1 from your verified backup and verify that readback before booting.
 4. Eject the card, return it to the powered-off deck, connect USB and power on normally. Open **Settings**, select **Connect deck**, and check the running version and release ID. The readback verifies the bytes written. This connection and version check verifies that the deck actually booted the controller. Future signed updates use the browser.

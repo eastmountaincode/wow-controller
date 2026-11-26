@@ -8,10 +8,13 @@ import subprocess
 import sys
 import tempfile
 
+from performance_engine import factory_audio_engine, performance_engine
+
 root = Path(__file__).resolve().parents[1]
 cached_zig = Path.home() / "Library/Caches/WOW Controller/zig-aarch64-macos-0.14.1/zig"
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--zig", default=os.environ.get("WOW_ZIG") or (str(cached_zig) if cached_zig.is_file() else shutil.which("zig")), help="Path to Zig 0.14.1")
+parser.add_argument("--factory-engine", type=Path, help="Original /bin/wowmachine from the factory system release")
 parser.add_argument("output",type=Path,help="New .upd file")
 args=parser.parse_args()
 if not args.zig or subprocess.check_output([args.zig,"version"],text=True).strip()!="0.14.1":
@@ -35,9 +38,11 @@ with tempfile.TemporaryDirectory() as temp:
     payload=adapter.read_bytes()
     if payload[:7]!=b"\x7fELF\x01\x01\x01" or payload[16:20]!=b"\x03\x00\x28\x00":
         raise ValueError("Invalid ARM keyboard adapter")
-    rows=(", ".join(f"0x{v:02x}" for v in payload[i:i+24]) for i in range(0,len(payload),24))
-    (artifacts/"wow-keyboard-payload.h").write_text(
-        "static const unsigned char wow_keyboard_payload[] = {\n" + ",\n".join(rows) + "\n};\n")
+    stock = factory_audio_engine(args.factory_engine, root/"backup/WOW-factory-system-partition-clean.img.gz", artifacts)
+    for name, data in [("keyboard", payload), ("performance", performance_engine(stock))]:
+        rows = (", ".join(f"0x{v:02x}" for v in data[i:i+24]) for i in range(0, len(data), 24))
+        (artifacts/f"wow-{name}-payload.h").write_text(
+            f"static const unsigned char wow_{name}_payload[] = {{\n" + ",\n".join(rows) + "\n};\n")
     verify=str(artifacts/"verify.o")
     run(args.zig,"build-obj","controller/wow-verify.zig",*target,"-mcpu","cortex_a7","-O","ReleaseSmall","-femit-bin="+verify)
     run(*cc,"controller/wow-update.c",verify,"-o",artifacts/"wow-update")

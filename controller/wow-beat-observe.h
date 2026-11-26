@@ -17,17 +17,30 @@ static inline int wow_beat_sample_state(uint64_t blocks, uint64_t rendered) {
     return -1;
 }
 
-/* GNU build ID and whole-file FNV-1a of the unmodified factory executable.
- * These identify the audio implementation, independent of the signed updater.
- * ARTIFACT SHA-256 26e08d4431ce563a530decd40bf56f001efc3a92a23407c64f75222db67873af. */
+enum { WOW_ENGINE_UNKNOWN, WOW_ENGINE_STOCK, WOW_ENGINE_PERFORMANCE };
+
+/* These two known executables have identical audio objects and renderer layout.
+ * Match the build ID and all bytes, independently of the active slot path.
+ * Stock SHA-256: 26e08d4431ce563a530decd40bf56f001efc3a92a23407c64f75222db67873af
+ * Performance:   afd4b6c90f97e2d589d93e4bd410e32a1493243c855bed68da861427c3944633 */
 static inline int wow_beat_factory_image(int fd) {
-    const uint8_t expected_id[] = {0x89,0x29,0x7c,0x1f,0xe2,0x75,0x6a,0xeb,0xac,0xfb,
+    static const uint8_t stock[] = {0x89,0x29,0x7c,0x1f,0xe2,0x75,0x6a,0xeb,0xac,0xfb,
                                     0xe3,0x31,0x26,0xd9,0xb9,0x79,0x9a,0x4d,0xb9,0xe8};
-    uint8_t id[sizeof expected_id], buf[4096];
+    static const uint8_t performance[] = {0xed,0xb3,0xa6,0x92,0x9b,0x49,0xe6,0x0a,0xac,0x22,
+                                          0x8c,0x76,0x0d,0x9e,0x58,0x86,0x18,0x1b,0x74,0x6a};
+    uint8_t id[sizeof stock], buf[4096];
     struct stat file;
     if (fstat(fd, &file) || file.st_size != 169640 ||
-        pread(fd, id, sizeof id, 0x180) != sizeof id ||
-        memcmp(id, expected_id, sizeof id)) return 0;
+        pread(fd, id, sizeof id, 0x180) != sizeof id) return WOW_ENGINE_UNKNOWN;
+    int kind;
+    uint32_t expected;
+    if (!memcmp(id, stock, sizeof id)) {
+        kind = WOW_ENGINE_STOCK;
+        expected = UINT32_C(0xfa00346f);
+    } else if (!memcmp(id, performance, sizeof id)) {
+        kind = WOW_ENGINE_PERFORMANCE;
+        expected = UINT32_C(0x1ed1f768);
+    } else return WOW_ENGINE_UNKNOWN;
 
     uint32_t hash = UINT32_C(2166136261);
     off_t offset = 0;
@@ -39,7 +52,7 @@ static inline int wow_beat_factory_image(int fd) {
             hash = (hash ^ buf[i]) * UINT32_C(16777619);
         offset += bytes;
     }
-    return offset == file.st_size && hash == UINT32_C(0xfa00346f);
+    return offset == file.st_size && hash == expected ? kind : WOW_ENGINE_UNKNOWN;
 }
 
 #if defined(__linux__) && defined(__arm__)

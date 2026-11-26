@@ -12,8 +12,8 @@ With the controller installed, connect the deck with a USB data cable and switch
 
 | Page | Controls |
 | --- | --- |
-| Deck | Watch the platter and hardware controls, start or stop the beat, and set the master, sample and beat levels. |
-| Library | Preview audio through the computer, load a sample or beat on the WOW, or transfer files to and from the deck. |
+| Deck | Follow the loaded sample on its waveform, monitor the platter and rear knobs, control the effects and beat, and adjust master, sample and beat volume. |
+| Library | See which sample is loaded and which beat is playing, preview a file through the computer, load it on the WOW, or transfer it over USB. |
 | MIDI | See the message map or try the platter synth. Another browser instrument can use the MIDI input directly. |
 | Settings | Set startup playback, bypass the rear mix knob, test the START light or install a signed update. |
 

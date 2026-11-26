@@ -116,7 +116,7 @@ async function readEffect(command = "EFFECT") {
   return value;
 }
 function showEffect() {
-  el("effectRow").hidden = !effect;
+  el("effectRow").hidden = !effect || (effect.enabled == null && !effect.mode);
   const toggle = el("deckEffect");
   const known = typeof effect?.enabled === "boolean";
   toggle.disabled = !known || busy;

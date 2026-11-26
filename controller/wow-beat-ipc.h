@@ -15,7 +15,8 @@
 #define WOW_BEAT_FIFO "/dev/wow-beat-command"
 #endif
 
-enum { WOW_BEAT_QUERY, WOW_BEAT_PLAY, WOW_BEAT_STOP, WOW_BEAT_TOGGLE };
+enum { WOW_BEAT_QUERY, WOW_BEAT_PLAY, WOW_BEAT_STOP, WOW_BEAT_TOGGLE,
+       WOW_EFFECT_QUERY, WOW_EFFECT_ON, WOW_EFFECT_OFF };
 
 struct beat_request {
     uint64_t expires_ns;
